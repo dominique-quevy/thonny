@@ -1,17 +1,17 @@
-import logging
 import tkinter as tk
 import traceback
+from logging import getLogger
 
 from thonny import get_workbench, ui_utils
 from thonny.codeview import get_syntax_options_for_tag
 from thonny.tktextext import TweakableText
+from thonny.ui_utils import get_hyperlink_cursor, lookup_style_option
 
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
 
 
 class RstText(TweakableText):
     def __init__(self, master=None, cnf={}, read_only=False, **kw):
-
         super().__init__(
             master=master,
             cnf=cnf,
@@ -467,10 +467,18 @@ class RstText(TweakableText):
         return self._visitor
 
     def _hyperlink_enter(self, event):
-        self.config(cursor="hand2")
+        self.config(cursor=get_hyperlink_cursor())
 
     def _hyperlink_leave(self, event):
         self.config(cursor="")
+
+    def on_theme_changed(self):
+        self.configure_tags()
+        text_bg = lookup_style_option("Text", "background")
+        for name in self.window_names():
+            w = self.nametowidget(name)
+            if isinstance(w, tk.Label):
+                w.configure(background=text_bg)
 
 
 def escape(s):

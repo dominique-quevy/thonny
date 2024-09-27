@@ -3,29 +3,36 @@
 import os
 import pathlib
 import tkinter as tk
-from pathlib import PurePath, PureWindowsPath, PurePosixPath
+from logging import getLogger
+from pathlib import PurePath, PurePosixPath, PureWindowsPath
 from tkinter import messagebox
-from tkinter.messagebox import showerror, askokcancel
-from typing import Iterable, Type, List, Dict, Optional
+from tkinter.messagebox import askokcancel, showerror
+from typing import Dict, Iterable, List, Optional, Type
 
 from thonny import get_runner, get_shell, get_workbench, ui_utils
 from thonny.base_file_browser import (
+    FILE_DIALOG_HEIGHT_EMS_OPTION,
+    FILE_DIALOG_ORDER_BY_OPTION,
+    FILE_DIALOG_REVERSE_ORDER_OPTION,
+    FILE_DIALOG_WIDTH_EMS_OPTION,
+    HIDDEN_FILES_OPTION,
     BaseLocalFileBrowser,
     BaseRemoteFileBrowser,
     get_file_handler_conf_key,
-    HIDDEN_FILES_OPTION,
 )
 from thonny.common import (
-    InlineCommand,
-    normpath_with_actual_case,
     IGNORED_FILES_AND_DIRS,
     CommandToBackend,
+    InlineCommand,
+    normpath_with_actual_case,
     universal_dirname,
 )
 from thonny.languages import tr
-from thonny.misc_utils import running_on_windows, sizeof_fmt, running_on_mac_os
-from thonny.running import construct_cd_command, InlineCommandDialog
+from thonny.misc_utils import running_on_mac_os, running_on_windows, sizeof_fmt
+from thonny.running import InlineCommandDialog, construct_cd_command
 from thonny.ui_utils import lookup_style_option
+
+logger = getLogger(__name__)
 
 minsize = 80
 
@@ -215,9 +222,57 @@ class ActiveLocalFileBrowser(BaseLocalFileBrowser):
 
         self.menu.add_command(label=tr("Upload to %s") % target_dir_desc, command=_upload)
 
+    def add_first_menu_items(self, context):
+        if self.check_for_venv():
+            self.menu.add_command(
+                label=tr("Activate virtual environment"), command=lambda: self.do_activate_venv()
+            )
+            self.menu.add_separator()
+
+        super().add_first_menu_items(context)
+
     def add_middle_menu_items(self, context):
         self.check_add_upload_command()
         super().add_middle_menu_items(context)
+
+    def _get_venv_path(self):
+        path = self.get_selected_path()
+        if not path:
+            return None
+
+        CFGFILE = "pyvenv.cfg"
+        fnam = self.get_selected_name()
+        try:
+            if os.path.exists(path):
+                if os.path.isdir(path):
+                    cfgfile = os.path.join(path, CFGFILE)
+                    if os.path.exists(cfgfile) and os.path.isfile(cfgfile):
+                        return path
+                else:
+                    if fnam == CFGFILE:
+                        return os.path.dirname(path)
+        except Exception:
+            logger.exception("_get_venv_path")
+
+    def check_for_venv(self):
+        return self._get_venv_path() is not None
+
+    def do_activate_venv(self):
+        venv_path = self._get_venv_path()
+
+        if running_on_windows():
+            backend_python = os.path.join(venv_path, "Scripts", "python.exe")
+        else:
+            backend_python = os.path.join(venv_path, "bin", "python3")
+
+        if os.path.isfile(backend_python):
+            get_workbench().set_option("run.backend_name", "LocalCPython")
+            get_workbench().set_option("LocalCPython.executable", backend_python)
+
+            # just like pressing the button
+            get_runner().cmd_stop_restart()
+        else:
+            messagebox.showerror("Error", f"Could not find {backend_python!r}", master=self)
 
 
 class ActiveRemoteFileBrowser(BaseRemoteFileBrowser):
@@ -227,6 +282,9 @@ class ActiveRemoteFileBrowser(BaseRemoteFileBrowser):
         get_workbench().bind("RemoteFilesChanged", self.on_remote_files_changed, True)
 
     def is_active_browser(self):
+        return True
+
+    def supports_new_file(self):
         return True
 
     def on_toplevel_response(self, msg):
@@ -344,7 +402,14 @@ class UploadDialog(TransferDialog):
             )
         )
         if picked_items:
-            self._cmd = InlineCommand("upload", items=picked_items)
+            backend_name = get_runner().get_backend_proxy().get_backend_name()
+            self._cmd = InlineCommand(
+                "upload",
+                items=picked_items,
+                make_shebang_scripts_executable=get_workbench().get_option(
+                    f"{backend_name}.make_uploaded_shebang_scripts_executable"
+                ),
+            )
             get_runner().send_command(self._cmd)
             return True
         else:
@@ -373,7 +438,7 @@ class DownloadDialog(TransferDialog):
             result.append(
                 {
                     "kind": source_item["kind"],
-                    "size": source_item["size"],
+                    "size_bytes": source_item["size_bytes"],
                     "source_path": source_path,
                     "target_path": transpose_path(
                         source_path, source_context_dir, target_dir, PurePosixPath, pathlib.Path
@@ -397,7 +462,7 @@ class DownloadDialog(TransferDialog):
 
                 result[target_path] = {
                     "kind": kind,
-                    "size": size,
+                    "size_bytes": size,
                 }
         return result
 
@@ -450,19 +515,19 @@ def pick_transfer_items(
                     % (item["target_path"], item["source_path"], target_info["kind"], item["kind"])
                 )
             elif item["kind"] == "file":
-                size_diff = item["size"] - target_info["size"]
+                size_diff = item["size_bytes"] - target_info["size_bytes"]
                 if size_diff > 0:
                     replacement = "a larger file (%s + %s)" % (
-                        sizeof_fmt(target_info["size"]),
+                        sizeof_fmt(target_info["size_bytes"]),
                         sizeof_fmt(size_diff),
                     )
                 elif size_diff < 0:
                     replacement = "a smaller file (%s - %s)" % (
-                        sizeof_fmt(target_info["size"]),
+                        sizeof_fmt(target_info["size_bytes"]),
                         sizeof_fmt(-size_diff),
                     )
                 else:
-                    replacement = "a file of same size (%s)" % sizeof_fmt(target_info["size"])
+                    replacement = "a file of same size (%s)" % sizeof_fmt(target_info["size_bytes"])
 
                 overwrites.append("'%s' with %s" % (item["target_path"], replacement))
 
@@ -471,8 +536,8 @@ def pick_transfer_items(
         return []
     elif overwrites:
         if askokcancel(
-            "Overwrite?",
-            "This operation will overwrite\n\n" + format_items(overwrites),
+            tr("Overwrite?"),
+            tr("This operation will overwrite %s") % format_items(overwrites) + "\n\n",
             master=master,
         ):
             return prepared_items
@@ -488,7 +553,7 @@ def format_items(items):
         return items[0]
     msg = "• " + "\n• ".join(items[:max_count])
     if len(items) > max_count:
-        msg += "\n ... %d more ..."
+        msg += "\n ... %d more ..." % (len(items) - max_count)
 
     return msg
 
@@ -513,7 +578,7 @@ def prepare_upload_items(
     result = [
         {
             "kind": kind,
-            "size": size,
+            "size_bytes": size,
             "source_path": source_path,
             "target_path": transpose_path(
                 source_path, source_context_dir, target_dir, pathlib.Path, PurePosixPath
@@ -547,10 +612,30 @@ def load_plugin() -> None:
     )
 
     get_workbench().set_default(HIDDEN_FILES_OPTION, False)
+    get_workbench().set_default(FILE_DIALOG_ORDER_BY_OPTION, "name")
+    get_workbench().set_default(FILE_DIALOG_REVERSE_ORDER_OPTION, False)
+    get_workbench().set_default(FILE_DIALOG_WIDTH_EMS_OPTION, 60)
+    get_workbench().set_default(FILE_DIALOG_HEIGHT_EMS_OPTION, 35)
 
     get_workbench().add_view(FilesView, tr("Files"), "nw")
 
-    for ext in [".py", ".pyw", ".pyi", ".txt", ".log", ".json", ".yml", ".yaml", ".md", ".rst"]:
+    for ext in [
+        ".py",
+        ".pyw",
+        ".pyi",
+        ".txt",
+        ".log",
+        ".json",
+        ".yml",
+        ".yaml",
+        ".md",
+        ".rst",
+        ".toml",
+        ".gitignore",
+        ".env",
+        ".cfg",
+        ".lock",
+    ]:
         get_workbench().set_default(get_file_handler_conf_key(ext), "thonny")
 
 

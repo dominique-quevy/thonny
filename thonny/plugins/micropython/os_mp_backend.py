@@ -1,6 +1,5 @@
 import datetime
 import io
-import logging
 import os
 import re
 import shlex
@@ -8,23 +7,34 @@ import sys
 import textwrap
 import time
 from abc import ABC
+from logging import getLogger
 from typing import Callable, Optional, Union
 
+# make sure thonny folder is in sys.path (relevant in dev)
+thonny_container = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+if thonny_container not in sys.path:
+    sys.path.insert(0, thonny_container)
+
 import thonny
+from thonny import report_time
 from thonny.backend import SshMixin
-from thonny.common import BackendEvent, serialize_message
-from thonny.plugins.micropython.backend import (
+from thonny.common import ALL_EXPLAINED_STATUS_CODE, PROCESS_ACK, BackendEvent, serialize_message
+from thonny.plugins.micropython.bare_metal_backend import LF, NORMAL_PROMPT
+from thonny.plugins.micropython.connection import MicroPythonConnection
+from thonny.plugins.micropython.mp_back import (
     ENCODING,
     EOT,
-    MicroPythonBackend,
-    ends_overlap,
-    ManagementError,
     PASTE_MODE_CMD,
     PASTE_MODE_LINE_PREFIX,
+    ManagementError,
+    MicroPythonBackend,
+    ends_overlap,
 )
-from thonny.plugins.micropython.bare_metal_backend import LF, NORMAL_PROMPT, PASTE_SUBMIT_MODE
-from thonny.common import ConnectionFailedException
-from thonny.plugins.micropython.connection import MicroPythonConnection
+from thonny.plugins.micropython.mp_common import PASTE_SUBMIT_MODE
+
+# Can't use __name__, because it will be "__main__"
+logger = getLogger("thonny.plugins.micropython.os_mp_backend")
+
 
 FALLBACK_BUILTIN_MODULES = [
     "cmath",
@@ -60,12 +70,12 @@ class UnixMicroPythonBackend(MicroPythonBackend, ABC):
         try:
             self._interpreter = self._resolve_executable(args["interpreter"])
             self._connection = self._create_connection()
-        except ConnectionFailedException as e:
+        except ConnectionRefusedError as e:
             text = "\n" + str(e) + "\n"
             msg = BackendEvent(event_type="ProgramOutput", stream_name="stderr", data=text)
             sys.stdout.write(serialize_message(msg) + "\n")
             sys.stdout.flush()
-            return
+            sys.exit(ALL_EXPLAINED_STATUS_CODE)
 
         MicroPythonBackend.__init__(self, None, args)
 
@@ -80,7 +90,7 @@ class UnixMicroPythonBackend(MicroPythonBackend, ABC):
             msg = "Executable '%s' not found. Please check your configuration!" % executable
             if not executable.startswith("/"):
                 msg += " You may need to provide its absolute path."
-            raise ConnectionFailedException(msg)
+            raise ConnectionRefusedError(msg)
 
     def _which(self, executable):
         raise NotImplementedError()
@@ -132,9 +142,9 @@ class UnixMicroPythonBackend(MicroPythonBackend, ABC):
             """
         )
 
-        result = super()._get_helper_code() + textwrap.indent(extra, "    ")
+        return super()._get_helper_code() + textwrap.indent(extra, "    ")
 
-    def _process_until_initial_prompt(self, clean):
+    def _process_until_initial_prompt(self, interrupt, clean):
         # This will be called only when the interpreter gets run without script.
         # (%Run script.py does not create a new instance of this class)
         output = []
@@ -142,11 +152,11 @@ class UnixMicroPythonBackend(MicroPythonBackend, ABC):
         def collect_output(data, stream_name):
             output.append(data)
 
-        self._report_time("befini")
-        self._forward_output_until_active_prompt(collect_output, "stdout")
+        report_time("befini")
+        self._process_output_until_active_prompt(collect_output, "stdout")
         self._original_welcome_text = "".join(output).replace("\r\n", "\n")
         self._welcome_text = self._tweak_welcome_text(self._original_welcome_text)
-        self._report_time("afini")
+        report_time("afini")
 
     def _fetch_builtin_modules(self):
         return FALLBACK_BUILTIN_MODULES
@@ -164,15 +174,15 @@ class UnixMicroPythonBackend(MicroPythonBackend, ABC):
         of Thonny commands.
         """
         end_marker = "#uIuIu"
-        self._connection.write(PASTE_MODE_CMD)
+        self._write(PASTE_MODE_CMD)
         self._connection.read_until(PASTE_MODE_LINE_PREFIX)
-        self._connection.write(script + end_marker)
+        self._write((script + end_marker).encode(ENCODING))
         self._connection.read_until(end_marker.encode("ascii"))
-        self._connection.write(EOT)
+        self._write(EOT)
         self._connection.read_until(b"\n")
-        self._forward_output_until_active_prompt(output_consumer)
+        self._process_output_until_active_prompt(output_consumer)
 
-    def _forward_output_until_active_prompt(
+    def _process_output_until_active_prompt(
         self, output_consumer: Callable[[str, str], None], stream_name="stdout"
     ):
         INCREMENTAL_OUTPUT_BLOCK_CLOSERS = re.compile(
@@ -229,12 +239,9 @@ class UnixMicroPythonBackend(MicroPythonBackend, ABC):
             out = data
         self._send_output(self._decode(out), "stdout")
 
-    def _write(self, data):
-        self._connection.write(data)
-
     def _cmd_Run(self, cmd):
         self._connection.close()
-        self._report_time("befconn")
+        report_time("befconn")
         args = cmd.args
         if cmd.source and args[0] == "-c":
             if len(args) > 1:
@@ -245,15 +252,15 @@ class UnixMicroPythonBackend(MicroPythonBackend, ABC):
             args = ["-c", cmd.source]
 
         self._connection = self._create_connection(args)
-        self._report_time("afconn")
-        self._forward_output_until_active_prompt(self._send_output, "stdout")
-        self._report_time("afforv")
+        report_time("afconn")
+        self._process_output_until_active_prompt(self._send_output, "stdout")
+        report_time("afforv")
         self.send_message(
             BackendEvent(event_type="HideTrailingOutput", text=self._original_welcome_text)
         )
-        self._report_time("beffhelp")
+        report_time("beffhelp")
         self._prepare_after_soft_reboot()
-        self._report_time("affhelp")
+        report_time("affhelp")
 
     def _cmd_execute_system_command(self, cmd):
         assert cmd.cmd_line.startswith("!")
@@ -277,9 +284,6 @@ class UnixMicroPythonBackend(MicroPythonBackend, ABC):
             }
         except Exception as e:
             raise ManagementError("Could not parse disk information", script, out, err) from e
-
-    def _is_connected(self):
-        return not self._connection._error
 
     def _get_epoch_offset(self) -> int:
         try:
@@ -333,11 +337,20 @@ class LocalUnixMicroPythonBackend(UnixMicroPythonBackend):
     def _decode(self, data: bytes) -> str:
         return data.decode(errors="replace")
 
+    def _create_pipkin_adapter(self):
+        raise NotImplementedError()
+
+    def _get_installed_distribution_metadata_bytes(self, meta_dir_path: str) -> bytes:
+        metadata_path = os.path.join(meta_dir_path, "METADATA")
+        with open(metadata_path, "ba") as fp:
+            return fp.read()
+
 
 class SshUnixMicroPythonBackend(UnixMicroPythonBackend, SshMixin):
     def __init__(self, args):
+        password = sys.stdin.readline().strip("\r\n")
         SshMixin.__init__(
-            self, args["host"], args["user"], args["password"], args["interpreter"], args.get("cwd")
+            self, args["host"], args["user"], password, args["interpreter"], args.get("cwd")
         )
         self._interpreter_launcher = args.get("interpreter_launcher", [])
         UnixMicroPythonBackend.__init__(self, args)
@@ -373,10 +386,17 @@ class SshUnixMicroPythonBackend(UnixMicroPythonBackend, SshMixin):
     def _decode(self, data: bytes) -> str:
         return data.decode(ENCODING, errors="replace")
 
+    def _create_pipkin_adapter(self):
+        raise NotImplementedError()
+
+    def _get_installed_distribution_metadata_bytes(self, meta_dir_path: str) -> bytes:
+        metadata_path = self._join_remote_path_parts(meta_dir_path, "METADATA")
+        return self._read_file_return_bytes(metadata_path)
+
 
 if __name__ == "__main__":
-    THONNY_USER_DIR = os.environ["THONNY_USER_DIR"]
     thonny.configure_backend_logging()
+    print(PROCESS_ACK)
 
     import ast
 

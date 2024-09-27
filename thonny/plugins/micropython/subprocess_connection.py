@@ -1,6 +1,7 @@
 import signal
 import sys
 
+from thonny.common import ALL_EXPLAINED_STATUS_CODE
 from thonny.plugins.micropython.connection import MicroPythonConnection
 
 
@@ -15,7 +16,7 @@ class SubprocessConnection(MicroPythonConnection):
                 "ERROR: This back-end requires a Python package named 'ptyprocess'.\n"
                 + "Install it via system package manager or 'Tools => Manage plug-ins'."
             )
-            sys.exit(1)
+            sys.exit(ALL_EXPLAINED_STATUS_CODE)
 
         super().__init__()
         cmd = [executable] + args
@@ -30,7 +31,7 @@ class SubprocessConnection(MicroPythonConnection):
 
         self._reading_thread.start()
 
-    def write(self, data):
+    def write(self, data: bytes) -> int:
         if isinstance(data, (bytes, bytearray)):
             data = data.decode(self.encoding)
         self._proc.write(data)

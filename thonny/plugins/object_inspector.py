@@ -1,7 +1,8 @@
 import ast
 import logging
 import tkinter as tk
-from tkinter import ttk, messagebox
+from logging import getLogger
+from tkinter import messagebox, ttk
 
 import thonny.memory
 from thonny import get_runner, get_workbench, ui_utils
@@ -10,7 +11,9 @@ from thonny.languages import tr
 from thonny.memory import MemoryFrame
 from thonny.misc_utils import shorten_repr
 from thonny.tktextext import TextFrame
-from thonny.ui_utils import ems_to_pixels
+from thonny.ui_utils import CustomToolbutton, ems_to_pixels
+
+logger = logging.getLogger(__name__)
 
 
 class ObjectInspector(ttk.Frame):
@@ -27,7 +30,7 @@ class ObjectInspector(ttk.Frame):
         self.active_page.grid(row=1, column=0, sticky="nsew")
 
         toolbar = self._create_toolbar()
-        toolbar.grid(row=0, column=0, sticky="nsew", pady=(0, 1))
+        toolbar.grid(row=0, column=0, sticky="nsew", pady=(0, 0))
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
@@ -46,7 +49,7 @@ class ObjectInspector(ttk.Frame):
         self.title_label = ttk.Label(
             toolbar,
             style="ViewToolbar.TLabel",
-            text=""
+            text="",
             # borderwidth=1,
             # background=ui_utils.get_main_background()
         )
@@ -90,17 +93,17 @@ class ObjectInspector(ttk.Frame):
         create_tab(6, tr("Attributes"), self.attributes_page)
 
         def create_navigation_link(col, image_filename, action, tooltip, padx=0):
-            button = ttk.Button(
+            button = CustomToolbutton(
                 toolbar,
-                # command=handler,
+                command=action,
+                style="ViewToolbar.Toolbutton",
                 image=get_workbench().get_image(image_filename),
-                style="ViewToolbar.Toolbutton",  # TODO: does this cause problems in some Macs?
                 state=tk.NORMAL,
+                pad=ems_to_pixels(0.2),
             )
             ui_utils.create_tooltip(button, tooltip)
 
             button.grid(row=0, column=col, sticky=tk.NE, padx=padx, pady=4)
-            button.bind("<Button-1>", action)
             return button
 
         def configure(event):
@@ -134,6 +137,7 @@ class ObjectInspector(ttk.Frame):
             [
                 FileHandleInspector(self.content_page),
                 FunctionInspector(self.content_page),
+                MicrobitImageInspector(self.content_page),
                 StringInspector(self.content_page),
                 ElementsInspector(self.content_page),
                 DictInspector(self.content_page),
@@ -150,14 +154,14 @@ class ObjectInspector(ttk.Frame):
     def _create_attributes_page(self):
         self.attributes_page = AttributesFrame(self)
 
-    def navigate_back(self, event):
+    def navigate_back(self):
         if len(self.back_links) == 0:
             return
 
         self.forward_links.append(self.object_id)
         self._show_object_by_id(self.back_links.pop(), True)
 
-    def navigate_forward(self, event):
+    def navigate_forward(self):
         if len(self.forward_links) == 0:
             return
 
@@ -231,7 +235,7 @@ class ObjectInspector(ttk.Frame):
                 back_links=self.back_links,
                 forward_links=self.forward_links,
                 include_attributes=self.active_page == self.attributes_page,
-                all_attributes=False,
+                all_attributes=True,
                 frame_width=frame_width,
                 frame_height=frame_height,
             )
@@ -267,12 +271,12 @@ class ObjectInspector(ttk.Frame):
         if self.back_links == []:
             self.back_label.config(foreground="lightgray", cursor="arrow")
         else:
-            self.back_label.config(foreground="blue", cursor="hand2")
+            self.back_label.config(foreground="blue", cursor=get_hyperlink_cursor())
 
         if self.forward_links == []:
             self.forward_label.config(foreground="lightgray", cursor="arrow")
         else:
-            self.forward_label.config(foreground="blue", cursor="hand2")
+            self.forward_label.config(foreground="blue", cursor=get_hyperlink_cursor())
         """
 
     def update_type_specific_info(self, object_info):
@@ -323,9 +327,8 @@ class FileHandleInspector(TextFrame, ContentInspector):
         return "file_content" in object_info or "file_error" in object_info
 
     def set_object_info(self, object_info):
-
         if "file_content" not in object_info:
-            logging.exception("File error: " + object_info["file_error"])
+            logger.exception("File error: " + object_info["file_error"])
             return
 
         assert "file_content" in object_info
@@ -412,6 +415,20 @@ class StringInspector(TextFrame, ContentInspector):
                            line_count_term,
                            "line" if line_count_term == 1 else "lines"))
         """
+
+
+class MicrobitImageInspector(TextFrame, ContentInspector):
+    def __init__(self, master):
+        ContentInspector.__init__(self, master)
+        TextFrame.__init__(self, master, read_only=True)
+
+    def applies_to(self, object_info):
+        return "microbit_image" in object_info
+
+    def set_object_info(self, object_info):
+        content = object_info["microbit_image"]
+        # self.text.configure(height=min(line_count_sep, 10))
+        self.text.set_content(content)
 
 
 class IntInspector(TextFrame, ContentInspector):
@@ -678,7 +695,7 @@ class ImageInspector(ContentInspector, tk.Frame):
 
 class AttributesFrame(thonny.memory.VariablesFrame):
     def __init__(self, master):
-        thonny.memory.VariablesFrame.__init__(self, master)
+        thonny.memory.VariablesFrame.__init__(self, master, consider_heading_stripe=False)
         self.configure(border=0)
 
     def on_select(self, event):

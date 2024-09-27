@@ -1,38 +1,44 @@
-import logging
 import pathlib
-import platform
 import sys
 import threading
 import time
+from logging import getLogger
 from textwrap import dedent
 
-from thonny.plugins.micropython.bare_metal_backend import (
-    NORMAL_PROMPT,
-    FIRST_RAW_PROMPT,
-    OUTPUT_ENQ,
-    OUTPUT_ACK,
-)
-from thonny.common import ConnectionFailedException
-from thonny.plugins.micropython.connection import MicroPythonConnection
+from .connection import MicroPythonConnection
 
-logger = logging.getLogger(__name__)
+OUTPUT_ENQ = b"\x05"
+OUTPUT_ACK = b"\x06"
+
+NORMAL_PROMPT = b">>> "
+FIRST_RAW_PROMPT = b"raw REPL; CTRL-B to exit\r\n>"
+
+
+logger = getLogger(__name__)
 
 
 class SerialConnection(MicroPythonConnection):
-    def __init__(self, port, baudrate, dtr=None, rts=None, skip_reader=False):
-
+    def __init__(self, port, baudrate=115200, dtr=None, rts=None, skip_reader=False):
         import serial
         from serial.serialutil import SerialException
 
         super().__init__()
 
         try:
-            self._serial = serial.Serial(port=None, baudrate=baudrate, timeout=None, exclusive=True)
+            self._serial = serial.Serial(
+                port=None, baudrate=baudrate, timeout=None, write_timeout=2, exclusive=True
+            )
+            logger.info(
+                "Before opening serial port, DTR=%r, RTS=%r", self._serial.dtr, self._serial.rts
+            )
             # Tweaking dtr and rts was proposed by
             # https://github.com/thonny/thonny/pull/1187
             # but in some cases it messes up communication.
             # At the same time, in some cases it is required
             # https://github.com/thonny/thonny/issues/1462
+            # More information:
+            #   https://github.com/npat-efault/picocom/blob/master/lowerrts.md
+            #   https://github.com/micropython/micropython/pull/11076
             if dtr is not None:
                 logger.debug("Setting DTR to %s", dtr)
                 self._serial.dtr = dtr
@@ -50,7 +56,7 @@ class SerialConnection(MicroPythonConnection):
             message = "Unable to connect to " + port + ": " + err_str
 
             # TODO: check if these error codes also apply to Linux and Mac
-            if error.errno == 13 and platform.system() == "Linux":
+            if error.errno == 13 and sys.platform == "linux":
                 try:
                     group = pathlib.Path(self._serial.port).group()
                 except Exception as e:
@@ -76,7 +82,7 @@ class SerialConnection(MicroPythonConnection):
             elif error.errno == 16:
                 message += "\n\n" + "Try restarting the device."
 
-            raise ConnectionFailedException(message)
+            raise ConnectionRefusedError(message)
 
         if skip_reader:
             self._reading_thread = None
@@ -84,7 +90,7 @@ class SerialConnection(MicroPythonConnection):
             self._reading_thread = threading.Thread(target=self._listen_serial, daemon=True)
             self._reading_thread.start()
 
-    def write(self, data):
+    def write(self, data: bytes) -> int:
         size = self._serial.write(data)
         # print(data.decode(), end="")
         assert size == len(data)
@@ -140,9 +146,6 @@ class SerialConnection(MicroPythonConnection):
     def outgoing_is_empty(self):
         return self._serial.out_waiting == 0
 
-    def reset_output_buffer(self):
-        self._serial.reset_output_buffer()
-
     def close(self):
         if self._serial is not None:
             try:
@@ -154,14 +157,13 @@ class SerialConnection(MicroPythonConnection):
                     self._serial.close()
                     self._serial = None
                 except Exception:
-                    logging.exception("Couldn't close serial")
+                    logger.exception("Couldn't close serial")
 
 
 class DifficultSerialConnection(SerialConnection):
     """For hardening the communication protocol"""
 
     def _make_output_available(self, data, block=True):
-
         # output prompts in parts
         if FIRST_RAW_PROMPT in data or NORMAL_PROMPT in data:
             if FIRST_RAW_PROMPT in data:
@@ -178,7 +180,3 @@ class DifficultSerialConnection(SerialConnection):
             super()._make_output_available(data[end - 1 :], block=block)
         else:
             super()._make_output_available(data, block=block)
-
-
-def debug(*args, file=sys.stderr):
-    print(*args, file=file)

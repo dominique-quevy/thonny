@@ -1,8 +1,10 @@
-jedi>=0.13
-setuptools>=33.1
-pyserial>=3.4
-pylint>=1.9
-docutils>=0.14
-mypy>=0.670
-asttokens>=1.1
-Send2Trash>=1.4
+jedi>=0.18.2
+pylint>=2.16.2
+docutils>=0.19
+mypy>=1.0.1
+asttokens>=2.2.1
+Send2Trash>=1.8.0
+packaging>=23.0
+
+# wheel is required by pipkin, which is currently vendored
+wheel>=0.38.4

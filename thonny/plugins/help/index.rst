@@ -6,9 +6,10 @@ Features
 * `Docking user windows <dock.rst>`_
 * `Special support for Turtle programs <turtle.rst>`_
 * `Specifying program arguments <program_arguments.rst>`_
-* `Simple mode and expert mode <modes.rst>`_
+* `Regular mode vs simple mode <modes.rst>`_
 * `Shell <shell.rst>`_
 * `Plotter <plotter.rst>`_
+* `Assistant <assistant.rst>`_
 * `Birdseye <birdseye.rst>`_
 * `Web development with Flask <flask.rst>`_
 

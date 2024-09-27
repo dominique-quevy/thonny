@@ -1,63 +1,149 @@
 # -*- coding: utf-8 -*-
-import logging
 import os.path
+import re
 import sys
 import tkinter as tk
 import traceback
-from logging import exception
-from tkinter import messagebox, ttk
-
 from _tkinter import TclError
+from logging import exception, getLogger
+from tkinter import messagebox, simpledialog, ttk
+from typing import Literal, Optional, Union
 
 from thonny import get_runner, get_workbench, ui_utils
 from thonny.base_file_browser import ask_backend_path, choose_node_for_file_operations
-from thonny.codeview import CodeView, BinaryFileException
+from thonny.codeview import BinaryFileException, CodeView, CodeViewText
 from thonny.common import (
+    REMOTE_PATH_MARKER,
     InlineCommand,
     TextRange,
     ToplevelResponse,
+    is_local_path,
+    is_remote_path,
     is_same_path,
     normpath_with_actual_case,
     universal_dirname,
 )
+from thonny.custom_notebook import CustomNotebook, CustomNotebookPage, CustomNotebookTab
 from thonny.languages import tr
 from thonny.misc_utils import running_on_mac_os, running_on_windows
 from thonny.tktextext import rebind_control_a
-from thonny.ui_utils import askopenfilename, asksaveasfilename, select_sequence
+from thonny.ui_utils import (
+    askopenfilename,
+    asksaveasfilename,
+    get_beam_cursor,
+    select_sequence,
+    windows_known_extensions_are_hidden,
+)
 
-_dialog_filetypes = [("Python files", ".py .pyw .pyi"), ("all files", ".*")]
+PYTHON_FILES_STR = tr("Python files")
+_dialog_filetypes = [(PYTHON_FILES_STR, ".py .pyw .pyi"), (tr("all files"), ".*")]
 
-REMOTE_PATH_MARKER = " :: "
 PYTHON_EXTENSIONS = {"py", "pyw", "pyi"}
 PYTHONLIKE_EXTENSIONS = set()
 
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
 
 
-class Editor(ttk.Frame):
-    def __init__(self, master):
+class EditorCodeViewText(CodeViewText):
+    """Allows separate class binding for CodeViewTexts which are inside editors"""
+
+    def __init__(self, master=None, cnf={}, **kw):
+        super().__init__(
+            master=master,
+            cnf=cnf,
+            **kw,
+        )
+        self.bindtags(self.bindtags() + ("EditorCodeViewText",))
+
+
+class BaseEditor(ttk.Frame):
+    def __init__(self, master, propose_remove_line_numbers, suppress_events=False):
         ttk.Frame.__init__(self, master)
-        assert isinstance(master, EditorNotebook)
-        self.notebook = master  # type: EditorNotebook
 
-        # parent of codeview will be workbench so that it can be maximized
         self._code_view = CodeView(
-            get_workbench(), propose_remove_line_numbers=True, font="EditorFont"
+            self,
+            propose_remove_line_numbers=propose_remove_line_numbers,
+            font="EditorFont",
+            text_class=EditorCodeViewText,
+            cursor=get_beam_cursor(),
+            suppress_events=suppress_events,
         )
-        get_workbench().event_generate(
-            "EditorTextCreated", editor=self, text_widget=self.get_text_widget()
-        )
-
         self._code_view.grid(row=0, column=0, sticky=tk.NSEW, in_=self)
-        self._code_view.home_widget = self  # don't forget home
-        self.maximizable_widget = self._code_view
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
         self._filename = None
+        self._file_source = None
+
+    def update_appearance(self):
+        self._code_view.set_gutter_visibility(
+            get_workbench().get_option("view.show_line_numbers") or get_workbench().in_simple_mode()
+        )
+        self._code_view.set_line_length_margin(
+            get_workbench().get_option("view.recommended_line_length")
+        )
+        self._code_view.text.update_tab_stops()
+        self._code_view.text.indent_width = get_workbench().get_option("edit.indent_width")
+        self._code_view.text.tab_width = get_workbench().get_option("edit.tab_width")
+        self._code_view.text.event_generate("<<UpdateAppearance>>")
+        self._code_view.grid_main_widgets()
+
+    def update_file_type(self):
+        if self._filename is None:
+            self._code_view.set_file_type(None)
+        else:
+            ext = self._filename.split(".")[-1].lower()
+            if ext in PYTHON_EXTENSIONS:
+                file_type = "python"
+            elif ext in PYTHONLIKE_EXTENSIONS:
+                file_type = "pythonlike"
+            else:
+                file_type = None
+
+            self._code_view.set_file_type(file_type)
+
+        self.update_appearance()
+
+    def is_modified(self):
+        return bool(self._code_view.text.edit_modified())
+
+    def get_title(self):
+        if self._filename is None:
+            result = tr("<untitled>")
+        elif is_remote_path(self._filename):
+            path = extract_target_path(self._filename)
+            name = path.split("/")[-1]
+            result = "[ " + name + " ]"
+        else:
+            result = self.shorten_filename_for_title(self._filename)
+
+        if self.is_modified():
+            result += " *"
+
+        return result
+
+    def shorten_filename_for_title(self, path: str) -> str:
+        return os.path.basename(path)
+
+    def get_text_widget(self) -> CodeViewText:
+        return self._code_view.text
+
+    def get_code_view(self):
+        # TODO: try to get rid of this
+        return self._code_view
+
+
+class Editor(BaseEditor):
+    def __init__(self, master):
+        assert isinstance(master, EditorNotebook)
+        self.containing_notebook = master  # type: EditorNotebook
+        super().__init__(master, propose_remove_line_numbers=True)
+        get_workbench().event_generate(
+            "EditorTextCreated", editor=self, text_widget=self.get_text_widget()
+        )
+
         self._last_known_mtime = None
-        self._asking_about_external_change = False
 
         self._code_view.text.bind("<<Modified>>", self._on_text_modified, True)
         self._code_view.text.bind("<<TextChange>>", self._on_text_change, True)
@@ -68,12 +154,11 @@ class Editor(ttk.Frame):
 
         self.update_appearance()
 
-    def get_text_widget(self):
-        return self._code_view.text
+    def get_content(self) -> str:
+        return self._code_view.get_content()
 
-    def get_code_view(self):
-        # TODO: try to get rid of this
-        return self._code_view
+    def set_filename(self, path):
+        self._filename = path
 
     def get_filename(self, try_hard=False):
         if self._filename is None and try_hard:
@@ -81,77 +166,69 @@ class Editor(ttk.Frame):
 
         return self._filename
 
-    def get_title(self):
-        if self.get_filename() is None:
-            result = "<untitled>"
-        elif is_remote_path(self.get_filename()):
-            path = extract_target_path(self.get_filename())
-            name = path.split("/")[-1]
-            result = "[ " + name + " ]"
+    def get_identifier(self):
+        if self._filename:
+            return self._filename
         else:
-            result = os.path.basename(self.get_filename())
+            return str(self.winfo_id())
 
-        if self.is_modified():
-            result += " *"
-
-        return result
+    def get_file_source(self):
+        return self._file_source
 
     def check_for_external_changes(self):
-        if self._asking_about_external_change:
-            # otherwise method will be re-entered when focus
-            # changes because of message box
-            return
-
         if self._filename is None:
             return
 
         if is_remote_path(self._filename):
             return
 
-        try:
-            self._asking_about_external_change = True
+        if self._last_known_mtime is None:
+            return
 
-            if self._last_known_mtime is None:
-                return
+        elif not os.path.exists(self._filename):
+            self.master.select(self)
 
-            elif not os.path.exists(self._filename):
+            if messagebox.askyesno(
+                tr("File is gone"),
+                tr("Looks like '%s' was deleted or moved.") % self._filename
+                + "\n\n"
+                + tr("Do you want to also close the editor?"),
+                master=self,
+            ):
+                self.master.close_editor(self)
+            else:
+                self.get_text_widget().edit_modified(True)
+                self._last_known_mtime = None
+
+        elif os.path.getmtime(self._filename) != self._last_known_mtime:
+            skip_confirmation = not self.is_modified() and get_workbench().get_option(
+                "edit.auto_refresh_saved_files"
+            )
+            if not skip_confirmation:
                 self.master.select(self)
 
-                if messagebox.askyesno(
-                    tr("File is gone"),
-                    tr("Looks like '%s' was deleted or moved outside of the editor.")
-                    % self._filename
-                    + "\n\n"
-                    + tr("Do you want to also close the editor?"),
-                    master=self,
-                ):
-                    self.master.close_editor(self)
-                else:
-                    self.get_text_widget().edit_modified(True)
-                    self._last_known_mtime = None
+            if skip_confirmation or messagebox.askyesno(
+                tr("External modification"),
+                tr("Looks like '%s' was modified outside of the editor.") % self._filename
+                + "\n\n"
+                + tr(
+                    "Do you want to discard current editor content and reload the file from disk?"
+                ),
+                master=self,
+            ):
+                prev_location = self.get_text_widget().index("insert")
+                self._load_file(self._filename, keep_undo=True)
+                try:
+                    self.get_text_widget().mark_set("insert", prev_location)
+                    self.see_line(int(prev_location.split(".")[0]))
+                except Exception:
+                    logger.exception("Could not restore previous location")
 
-            elif os.path.getmtime(self._filename) != self._last_known_mtime:
-                self.master.select(self)
-
-                if messagebox.askyesno(
-                    tr("External modification"),
-                    tr("Looks like '%s' was modified outside the editor.") % self._filename
-                    + "\n\n"
-                    + tr(
-                        "Do you want to discard current editor content and reload the file from disk?"
-                    ),
-                    master=self,
-                ):
-                    self._load_file(self._filename, keep_undo=True)
-                else:
-                    self._last_known_mtime = os.path.getmtime(self._filename)
-        finally:
-            self._asking_about_external_change = False
+            self._last_known_mtime = os.path.getmtime(self._filename)
 
     def get_long_description(self):
-
         if self._filename is None:
-            result = "<untitled>"
+            result = tr("<untitled>")
         else:
             result = self._filename
 
@@ -171,42 +248,52 @@ class Editor(ttk.Frame):
                 result = self._load_remote_file(filename)
             else:
                 result = self._load_local_file(filename, keep_undo)
-                if not result:
-                    return False
+            if not result:
+                return False
         except BinaryFileException:
             messagebox.showerror(
-                "Problem", "%s doesn't look like a text file" % filename, master=self
+                tr("Problem"), tr("%s doesn't look like a text file") % (filename,), master=self
             )
             return False
         except SyntaxError as e:
             assert "encoding" in str(e).lower()
             messagebox.showerror(
-                "Problem loading file",
-                "This file seems to have problems with encoding.\n\n"
-                + "Make sure it is in UTF-8 or contains proper encoding hint.",
+                tr("Problem loading file"),
+                tr(
+                    "This file seems to have problems with encoding.\n\n"
+                    "Make sure it is in UTF-8 or contains proper encoding hint."
+                ),
                 master=self,
             )
             return False
 
         self.update_appearance()
+        self._update_file_source()
         return True
 
     def _load_local_file(self, filename, keep_undo=False):
-        with open(filename, "rb") as fp:
-            source = fp.read()
+        if os.path.exists(filename):
+            with open(filename, "rb") as fp:
+                source = fp.read()
+                exists = True
+        else:
+            source = b""
+            exists = False
 
         # Make sure Windows filenames have proper format
         filename = normpath_with_actual_case(filename)
         self._filename = filename
         self.update_file_type()
-        self._last_known_mtime = os.path.getmtime(self._filename)
+        if exists:
+            self._last_known_mtime = os.path.getmtime(self._filename)
 
         get_workbench().event_generate("Open", editor=self, filename=filename)
         if not self._code_view.set_content_as_bytes(source, keep_undo):
             return False
-        self.get_text_widget().edit_modified(False)
+        self.get_text_widget().edit_modified(not exists)
         self._code_view.focus_set()
         self.master.remember_recent_file(filename)
+        get_workbench().event_generate("Opened", editor=self, filename=self._filename)
         return True
 
     def _load_remote_file(self, filename):
@@ -237,13 +324,10 @@ class Editor(ttk.Frame):
         self.update_title()
         return True
 
-    def is_modified(self):
-        return bool(self._code_view.text.edit_modified())
-
     def save_file_enabled(self):
         return self.is_modified() or not self.get_filename()
 
-    def save_file(self, ask_filename=False, save_copy=False, node=None):
+    def save_file(self, ask_filename=False, save_copy=False, node=None) -> Optional[str]:
         if self._filename is not None and not ask_filename:
             save_filename = self._filename
             get_workbench().event_generate("Save", editor=self, filename=save_filename)
@@ -253,12 +337,14 @@ class Editor(ttk.Frame):
             if not save_filename:
                 return None
 
-            if self.notebook.get_editor(save_filename) is not None:
+            if self.containing_notebook.get_editor(save_filename) is not None:
                 messagebox.showerror(
-                    "File is open",
-                    "This file is already open in Thonny.\n\n"
-                    "If you want to save with this name,\n"
-                    "close the existing editor first!",
+                    tr("File is open"),
+                    tr(
+                        "This file is already open in Thonny.\n\n"
+                        "If you want to save with this name,\n"
+                        "close the existing editor first!"
+                    ),
                     master=get_workbench(),
                 )
                 return None
@@ -281,10 +367,20 @@ class Editor(ttk.Frame):
             self._filename = save_filename
             self.update_file_type()
 
-        self.update_title()
+        if not save_copy or self._filename == save_filename:
+            self.update_title()
+            get_workbench().event_generate("Saved", editor=self, filename=self._filename)
+
+        self._update_file_source()
         return save_filename
 
     def write_local_file(self, save_filename, content_bytes, save_copy):
+        process_shebang = content_bytes.startswith(b"#!/") and get_workbench().get_option(
+            "file.make_saved_shebang_scripts_executable"
+        )
+        if process_shebang:
+            content_bytes = content_bytes.replace(b"\r\n", b"\n")
+
         try:
             f = open(save_filename, mode="wb")
             f.write(content_bytes)
@@ -292,6 +388,8 @@ class Editor(ttk.Frame):
             # Force writes on disk, see https://learn.adafruit.com/adafruit-circuit-playground-express/creating-and-editing-code#1-use-an-editor-that-writes-out-the-file-completely-when-you-save-it
             os.fsync(f)
             f.close()
+            if process_shebang:
+                os.chmod(save_filename, 0o755)
             if not save_copy or save_filename == self._filename:
                 self._last_known_mtime = os.path.getmtime(save_filename)
             get_workbench().event_generate(
@@ -299,7 +397,9 @@ class Editor(ttk.Frame):
             )
         except PermissionError:
             messagebox.showerror(
-                "Permission Error", "Looks like this file or folder is not writable.", master=self
+                tr("Permission Error"),
+                tr("Looks like this file or folder is not writable."),
+                master=self,
             )
             return False
 
@@ -311,27 +411,11 @@ class Editor(ttk.Frame):
 
         return True
 
-    def update_file_type(self):
-        if self._filename is None:
-            self._code_view.set_file_type(None)
-        else:
-            ext = self._filename.split(".")[-1].lower()
-            if ext in PYTHON_EXTENSIONS:
-                file_type = "python"
-            elif ext in PYTHONLIKE_EXTENSIONS:
-                file_type = "pythonlike"
-            else:
-                file_type = None
-
-            self._code_view.set_file_type(file_type)
-
-        self.update_appearance()
-
     def write_remote_file(self, save_filename, content_bytes, save_copy):
         if get_runner().ready_for_remote_file_operations(show_message=True):
             target_filename = extract_target_path(save_filename)
 
-            get_runner().send_command_and_wait(
+            result = get_runner().send_command_and_wait(
                 InlineCommand(
                     "write_file",
                     path=target_filename,
@@ -339,9 +423,19 @@ class Editor(ttk.Frame):
                     editor_id=id(self),
                     blocking=True,
                     description=tr("Saving to %s") % target_filename,
+                    make_shebang_scripts_executable=get_workbench().get_option(
+                        "file.make_saved_shebang_scripts_executable"
+                    ),
                 ),
                 dialog_title=tr("Saving"),
             )
+
+            if result is None:
+                result = {"error": "Unknown error"}
+
+            if "error" in result:
+                messagebox.showerror(tr("Could not save"), str(result["error"]))
+                return False
 
             if not save_copy:
                 self._code_view.text.edit_modified(False)
@@ -355,11 +449,12 @@ class Editor(ttk.Frame):
             get_workbench().event_generate("RemoteFilesChanged")
             return True
         else:
+            messagebox.showerror(tr("Could not save"), tr("Back-end is not ready"))
             return False
 
     def ask_new_path(self, node=None):
         if node is None:
-            node = choose_node_for_file_operations(self.winfo_toplevel(), "Where to save to?")
+            node = choose_node_for_file_operations(self.winfo_toplevel(), tr("Where to save to?"))
         if not node:
             return None
 
@@ -370,8 +465,9 @@ class Editor(ttk.Frame):
             return self.ask_new_remote_path()
 
     def ask_new_remote_path(self):
-        target_path = ask_backend_path(self.winfo_toplevel(), "save")
+        target_path = ask_backend_path(self.winfo_toplevel(), "save", filetypes=_dialog_filetypes)
         if target_path:
+            target_path = self._check_add_py_extension(target_path)
             return make_remote_path(target_path)
         else:
             return None
@@ -384,29 +480,32 @@ class Editor(ttk.Frame):
             initialdir = os.path.dirname(self._filename)
             initialfile = os.path.basename(self._filename)
 
-        # http://tkinter.unpythonic.net/wiki/tkFileDialog
+        # https://tcl.tk/man/tcl8.6/TkCmd/getOpenFile.htm
+        type_var = tk.StringVar(value="")
         new_filename = asksaveasfilename(
             filetypes=_dialog_filetypes,
-            defaultextension=".py",
+            defaultextension=None,
             initialdir=initialdir,
             initialfile=initialfile,
             parent=get_workbench(),
+            typevariable=type_var,
         )
+        logger.info("Save dialog returned %r with typevariable %r", new_filename, type_var.get())
 
         # Different tkinter versions may return different values
         if new_filename in ["", (), None]:
             return None
-
-        # Seems that in some Python versions defaultextension
-        # acts funny
-        if new_filename.lower().endswith(".py.py"):
-            new_filename = new_filename[:-3]
 
         if running_on_windows():
             # may have /-s instead of \-s and wrong case
             new_filename = os.path.join(
                 normpath_with_actual_case(os.path.dirname(new_filename)),
                 os.path.basename(new_filename),
+            )
+
+        if type_var.get() == PYTHON_FILES_STR or type_var.get() == "":
+            new_filename = self._check_add_py_extension(
+                new_filename, without_asking=type_var.get() == PYTHON_FILES_STR
             )
 
         if new_filename.endswith(".py"):
@@ -424,14 +523,16 @@ class Editor(ttk.Frame):
                 "matplotlib",
                 "numpy",
             ]:
-
                 # More proper name analysis will be performed by ProgramNamingAnalyzer
                 if not tk.messagebox.askyesno(
-                    "Potential problem",
-                    "If you name your script '%s', " % base
-                    + "you won't be able to import the library module named '%s'" % mod_name
+                    tr("Potential problem"),
+                    tr(
+                        "If you name your script '%s', "
+                        "you won't be able to import the library module named '%s'"
+                    )
+                    % (base, mod_name)
                     + ".\n\n"
-                    + "Do you still want to use this name for your script?",
+                    + tr("Do you still want to use this name for your script?"),
                     master=self,
                 ):
                     return self.ask_new_local_path()
@@ -440,16 +541,6 @@ class Editor(ttk.Frame):
 
     def show(self):
         self.master.select(self)
-
-    def update_appearance(self):
-        self._code_view.set_gutter_visibility(
-            get_workbench().get_option("view.show_line_numbers") or get_workbench().in_simple_mode()
-        )
-        self._code_view.set_line_length_margin(
-            get_workbench().get_option("view.recommended_line_length")
-        )
-        self._code_view.text.update_tabs()
-        self._code_view.text.event_generate("<<UpdateAppearance>>")
 
     def _listen_debugger_progress(self, event):
         # Go read-only
@@ -500,11 +591,13 @@ class Editor(ttk.Frame):
     def update_title(self):
         try:
             self.master.update_editor_title(self)
-        except Exception as e:
-            logger.exception("Could not update editor title", exc_info=e)
+        except Exception:
+            logger.exception("Could not update editor title")
 
     def _on_text_change(self, event):
-        self.update_title()
+        # may not be added to the Notebook yet
+        if self.containing_notebook.has_content(self):
+            self.update_title()
 
     def destroy(self):
         get_workbench().unbind("DebuggerResponse", self._listen_debugger_progress)
@@ -514,16 +607,44 @@ class Editor(ttk.Frame):
             "EditorTextDestroyed", editor=self, text_widget=self.get_text_widget()
         )
 
+    def _check_add_py_extension(self, path: str, without_asking: bool = False) -> str:
+        assert path
+        parts = re.split(r"[/\\]", path)
+        name = parts[-1]
+        if "." not in name:
+            if without_asking or messagebox.askyesno(
+                title=tr("Confirmation"),
+                message=tr("Python files usually have .py extension.")
+                + "\n\n"
+                + tr("Did you mean '%s'?" % (name + ".py")),
+                parent=self.winfo_toplevel(),
+            ):
+                return path + ".py"
+            else:
+                return path
 
-class EditorNotebook(ui_utils.ClosableNotebook):
+        return path
+
+    def _update_file_source(self):
+        if is_remote_path(self._filename):
+            proxy = get_runner().get_backend_proxy()
+            if proxy is not None:
+                self._file_source = get_runner().get_backend_proxy().get_machine_id()
+            else:
+                logger.warning("update_file_source: no proxy, leaving as is")
+        else:
+            self._file_source = "-"  # should not match any machine id
+
+
+class EditorNotebook(CustomNotebook):
     """
     Manages opened files / modules
     """
 
     def __init__(self, master):
-        super().__init__(master, padding=0)
+        super().__init__(master)
 
-        get_workbench().set_default("file.reopen_all_files", False)
+        get_workbench().set_default("file.reopen_files", True)
         get_workbench().set_default("file.open_files", [])
         get_workbench().set_default("file.current_file", None)
         get_workbench().set_default("file.recent_files", [])
@@ -531,6 +652,10 @@ class EditorNotebook(ui_utils.ClosableNotebook):
         get_workbench().set_default("view.show_line_numbers", True)
         get_workbench().set_default("view.recommended_line_length", 0)
         get_workbench().set_default("edit.indent_with_tabs", False)
+        get_workbench().set_default("edit.auto_refresh_saved_files", True)
+        get_workbench().set_default("edit.indent_width", 4)
+        get_workbench().set_default("edit.tab_width", 4)
+        get_workbench().set_default("file.make_saved_shebang_scripts_executable", True)
 
         self._recent_menu = tk.Menu(
             get_workbench().get_menu("file"), postcommand=self._update_recent_menu
@@ -545,13 +670,17 @@ class EditorNotebook(ui_utils.ClosableNotebook):
                 self._open_file(filename)
         """
 
-        self.update_appearance()
-
         # should be in the end, so that it can be detected when
         # constructor hasn't completed yet
-        self.preferred_size_in_pw = None
+        self._checking_external_changes = False
 
-        get_workbench().bind("WindowFocusIn", self.on_focus_window, True)
+        get_workbench().bind("WindowFocusIn", self.check_for_external_changes, True)
+        get_workbench().bind("ToplevelResponse", self.check_for_external_changes, True)
+        self.bind("<<NotebookTabChanged>>", self.on_tab_changed, True)
+
+    def on_tab_changed(self, *args):
+        # Required to avoid incorrect sizing of parent panes
+        self.update_idletasks()
 
     def _init_commands(self):
         # TODO: do these commands have to be in EditorNotebook ??
@@ -668,39 +797,40 @@ class EditorNotebook(ui_utils.ClosableNotebook):
             group=10,
         )
 
+        get_workbench().add_command(
+            "goto_source_line",
+            "edit",
+            tr("Go to line..."),
+            self._cmd_goto_source_line,
+            default_sequence=select_sequence("<Control-g>", "<Command-g>"),
+            # tester=,
+            # no global switch, or cross plugin switch?
+            # todo use same as find and replace -> plugins/find_replace.py
+            group=60,
+        )
+
         get_workbench().createcommand("::tk::mac::OpenDocument", self._mac_open_document)
 
-    def load_startup_files(self):
-        """If no filename was sent from command line
-        then load previous files (if setting allows)"""
-
-        cmd_line_filenames = [
-            os.path.abspath(name) for name in sys.argv[1:] if os.path.exists(name)
-        ]
-
-        if len(cmd_line_filenames) > 0:
-            filenames = cmd_line_filenames
-        elif get_workbench().get_option("file.reopen_all_files"):
+    def load_previous_files(self):
+        if get_workbench().get_option("file.reopen_files"):
             filenames = get_workbench().get_option("file.open_files")
-        elif get_workbench().get_option("file.current_file"):
-            filenames = [get_workbench().get_option("file.current_file")]
         else:
             filenames = []
 
+        shown_files_count = 0
         if len(filenames) > 0:
             for filename in filenames:
                 if os.path.exists(filename):
                     self.show_file(filename)
+                    shown_files_count += 1
 
             cur_file = get_workbench().get_option("file.current_file")
             # choose correct active file
-            if len(cmd_line_filenames) > 0:
-                self.show_file(cmd_line_filenames[0])
-            elif cur_file and os.path.exists(cur_file):
+            if cur_file and os.path.exists(cur_file):
                 self.show_file(cur_file)
-            else:
-                self._cmd_new_file()
-        else:
+                shown_files_count += 1
+
+        if shown_files_count == 0:
             self._cmd_new_file()
 
     def save_all_named_editors(self):
@@ -751,8 +881,16 @@ class EditorNotebook(ui_utils.ClosableNotebook):
         get_workbench().set_option("file.open_files", open_files)
 
     def _cmd_new_file(self):
+        self.open_new_file()
+
+    def open_new_file(self, path=None, remote=False):
         new_editor = Editor(self)
         get_workbench().event_generate("NewFile", editor=new_editor)
+        if path:
+            if remote:
+                new_editor.set_filename(make_remote_path(path))
+            else:
+                new_editor.set_filename(path)
         self.add(new_editor, text=new_editor.get_title())
         self.select(new_editor)
         new_editor.focus_set()
@@ -774,7 +912,9 @@ class EditorNotebook(ui_utils.ClosableNotebook):
             )
         else:
             assert node == "remote"
-            target_path = ask_backend_path(self.winfo_toplevel(), "open")
+            target_path = ask_backend_path(
+                self.winfo_toplevel(), "open", filetypes=_dialog_filetypes
+            )
             if not target_path:
                 return
 
@@ -790,24 +930,24 @@ class EditorNotebook(ui_utils.ClosableNotebook):
         return "break"
 
     def _close_files(self, except_index=None):
-
         for tab_index in reversed(range(len(self.winfo_children()))):
             if except_index is not None and tab_index == except_index:
                 continue
             else:
                 editor = self.get_child_by_index(tab_index)
-                if self.check_allow_closing(editor):
-                    self.forget(editor)
-                    editor.destroy()
+                self.close_editor(editor, force=False)
 
     def _cmd_close_file(self):
         self.close_tab(self.index(self.select()))
 
-    def close_tab(self, index):
-        editor = self.get_child_by_index(index)
+    def close_tab(self, index_or_tab: Union[int, CustomNotebookTab]):
+        if isinstance(index_or_tab, int):
+            page = self.pages[index_or_tab]
+        else:
+            page = self.get_page_by_tab(index_or_tab)
 
-        if editor:
-            self.close_editor(editor)
+        assert isinstance(page.content, Editor)
+        self.close_editor(page.content)
 
     def close_editor(self, editor, force=False):
         if not force and not self.check_allow_closing(editor):
@@ -891,13 +1031,20 @@ class EditorNotebook(ui_utils.ClosableNotebook):
         if len(editors) == 1 and not editors[0].is_modified() and not editors[0].get_filename():
             self._cmd_close_file()
 
+    def _cmd_goto_source_line(self):
+        editor = self.get_current_editor()
+        if editor:
+            line_no = simpledialog.askinteger(tr("Go to line"), tr("Line number"))
+            if line_no:
+                editor.select_line(line_no)
+
     def _mac_open_document(self, *args):
         for arg in args:
             if isinstance(arg, str) and os.path.exists(arg):
                 self.show_file(arg)
         get_workbench().become_active_window()
 
-    def get_current_editor(self):
+    def get_current_editor(self) -> Optional[Editor]:
         return self.get_current_child()
 
     def get_current_editor_content(self):
@@ -905,7 +1052,7 @@ class EditorNotebook(ui_utils.ClosableNotebook):
         if editor is None:
             return None
         else:
-            return editor.get_code_view().get_content()
+            return editor.get_content()
 
     def get_all_editors(self):
         # When workspace is closing, self.winfo_children()
@@ -930,11 +1077,11 @@ class EditorNotebook(ui_utils.ClosableNotebook):
             editor = self.get_editor(filename, True)
         except PermissionError:
             logger.exception("Loading " + filename)
-            msg = "Got permission error when trying to load\n" + filename
+            msg = tr("Got permission error when trying to load\n%s") % (filename,)
             if running_on_mac_os() and propose_dialog:
-                msg += "\n\nTry opening it with File => Open."
+                msg += "\n\n" + tr("Try opening it with File => Open.")
 
-            messagebox.showerror("Permission error", msg, master=self)
+            messagebox.showerror(tr("Permission error"), msg, master=self)
             return None
 
         if editor is None:
@@ -974,7 +1121,7 @@ class EditorNotebook(ui_utils.ClosableNotebook):
         try:
             self.indicate_modification()
         except Exception:
-            logging.exception("Could not update modification indication")
+            logger.exception("Could not update modification indication")
 
     def indicate_modification(self):
         if not running_on_mac_os():
@@ -1007,16 +1154,18 @@ class EditorNotebook(ui_utils.ClosableNotebook):
             editor.destroy()
             return None
 
-    def get_editor(self, filename, open_when_necessary=False):
-        if not is_remote_path(filename) and os.path.isfile(filename):
-            filename = normpath_with_actual_case(os.path.abspath(filename))
+    def get_editor(self, filename_or_id, open_when_necessary=False):
+        if os.path.isfile(filename_or_id):
+            filename_or_id = normpath_with_actual_case(os.path.abspath(filename_or_id))
+
         for child in self.winfo_children():
-            child_filename = child.get_filename(False)
-            if child_filename == filename:
+            assert isinstance(child, Editor)
+            child_identifier = child.get_identifier()
+            if child_identifier == filename_or_id:
                 return child
 
         if open_when_necessary:
-            return self._open_file(filename)
+            return self._open_file(filename_or_id)
         else:
             return None
 
@@ -1041,8 +1190,10 @@ class EditorNotebook(ui_utils.ClosableNotebook):
 
         if confirm:
             for editor_ in modified_editors:
+                assert isinstance(editor_, Editor)
                 if editor_.get_filename(True):
-                    editor_.save_file()
+                    if not editor_.save_file():
+                        return False
                 else:
                     return False
             return True
@@ -1052,9 +1203,79 @@ class EditorNotebook(ui_utils.ClosableNotebook):
         else:
             return True
 
-    def on_focus_window(self, event=None):
+    def check_for_external_changes(self, event=None):
+        if self._checking_external_changes:
+            # otherwise the method will be re-entered when focus
+            # changes because of a confirmation message box
+            return
+
+        self._checking_external_changes = True
+        try:
+            for editor in self.get_all_editors():
+                editor.check_for_external_changes()
+        finally:
+            self._checking_external_changes = False
+
+    def after_insert(
+        self,
+        pos: Union[int, Literal["end"]],
+        page: CustomNotebookPage,
+        old_notebook: Optional[CustomNotebook],
+    ) -> None:
+        super().after_insert(pos, page, old_notebook)
+        editor: Editor = page.content
+        get_workbench().event_generate(
+            "InsertEditorToNotebook", pos=pos, editor=editor, text_widget=editor.get_text_widget()
+        )
+
+    def after_forget(
+        self, pos: int, page: CustomNotebookPage, new_notebook: Optional[CustomNotebook]
+    ) -> None:
+        super().after_forget(pos, page, new_notebook)
+        editor: Editor = page.content
+        get_workbench().event_generate(
+            "RemoveEditorFromNotebook", pos=pos, editor=editor, text_widget=editor.get_text_widget()
+        )
+
+    def try_close_remote_files_from_another_machine(
+        self, dialog_parent, new_machine_id: str
+    ) -> bool:
+        all_remote_editors_to_be_closed = []
+        modified_remote_editors_to_be_closed = []
+        modified_remote_files_to_be_closed = []
         for editor in self.get_all_editors():
-            editor.check_for_external_changes()
+            if editor.get_file_source() == new_machine_id:
+                continue
+
+            filename = editor.get_filename()
+            if filename is not None and is_remote_path(filename):
+                all_remote_editors_to_be_closed.append(editor)
+                if editor.is_modified():
+                    modified_remote_editors_to_be_closed.append(editor)
+                    modified_remote_files_to_be_closed.append(extract_target_path(filename))
+
+        if len(modified_remote_files_to_be_closed) > 0:
+            message = (
+                tr("All files from %s will be closed before switching the interpreter.")
+                % get_runner().get_node_label()
+            ) + "\n\n"
+            message += tr("Unsaved changes to the following files will be lost:") + "\n"
+            message += "\n • " + "\n • ".join(modified_remote_files_to_be_closed)
+            message += "\n\n" + tr("Do you still want to continue?")
+
+            confirm = messagebox.askyesno(
+                title=tr("Discard unsaved changes?"),
+                message=message,
+                default=messagebox.NO,
+                master=dialog_parent,
+            )
+            if not confirm:
+                return False
+
+        for editor in all_remote_editors_to_be_closed:
+            self.close_editor(editor, force=True)
+
+        return True
 
 
 def get_current_breakpoints():
@@ -1083,14 +1304,6 @@ def get_saved_current_script_filename(force=True):
         filename = editor.save_file()
 
     return filename
-
-
-def is_remote_path(s):
-    return REMOTE_PATH_MARKER in s
-
-
-def is_local_path(s):
-    return not is_remote_path(s)
 
 
 def get_target_dirname_from_editor_filename(s):

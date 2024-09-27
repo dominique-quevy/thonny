@@ -1,6 +1,8 @@
 # Bootstrap script for Thonny as an application bundle.
 # Inspired by https://github.com/python/cpython/blob/master/Mac/IDLE/IDLE.app/Contents/Resources/idlemain.py
-import sys, os.path
+# See https://github.com/python/cpython/issues/112916#issuecomment-1872822685 for possible improvement
+import os.path
+import sys
 
 # Make sure sys.executable points to the python interpreter inside the
 # framework, instead of at the helper executable inside the application
@@ -59,5 +61,5 @@ for idx, value in enumerate(sys.argv):
 
 # Now it is safe to import thonny.
 if __name__ == '__main__':
-    import thonny
-    thonny.launch()
+    import thonny.main
+    thonny.main.run()

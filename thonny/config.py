@@ -3,17 +3,13 @@
 import ast
 import configparser
 import datetime
-import logging
 import os.path
-import sys
 import tkinter as tk
 from configparser import ConfigParser
-from logging import exception
+from logging import exception, getLogger
+from typing import Any, Dict
 
-from thonny import THONNY_USER_DIR
-
-
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
 
 _manager_cache = {}
 
@@ -26,62 +22,27 @@ def try_load_configuration(filename):
         # use cache so Workbench doesn't create duplicate manager
         # when FirstRunWindow already created one
         mgr = ConfigurationManager(filename)
-        _manager_cache[filename] = mgr
-        return mgr
-    except configparser.Error:
-        from tkinter import messagebox
+    except configparser.Error as e:
+        new_path = filename + ".corrupt"
+        os.replace(filename, new_path)
+        mgr = ConfigurationManager(filename, error_reading_existing_file=e)
 
-        if os.path.exists(filename) and messagebox.askyesno(
-            "Problem",
-            "Thonny's configuration file can't be read. It may be corrupt.\n\n"
-            + "Do you want to discard the file and open Thonny with default settings?",
-            master=tk._default_root,
-        ):
-            os.replace(filename, filename + "_corrupt")
-            # For some reasons Thonny styles are not loaded properly once messagebox has been shown before main window (At least Windows Py 3.5)
-            raise SystemExit("Configuration file has been discarded. Please restart Thonny!")
-        else:
-            raise
+    _manager_cache[filename] = mgr
+    return mgr
 
 
 class ConfigurationManager:
-    def __init__(self, filename):
+    def __init__(self, filename, error_reading_existing_file=None):
         self._ini = ConfigParser(interpolation=None)
+        self.error_reading_existing_file = error_reading_existing_file
         self._filename = filename
         self._defaults = {}
         self._defaults_overrides_str = {}
-        self._variables = {}  # Tk variables
+        self._variables: Dict[str, tk.Variable] = {}
 
         if os.path.exists(self._filename):
             with open(self._filename, "r", encoding="UTF-8") as fp:
                 self._ini.read_file(fp)
-        else:
-            # For migration to new conf directory
-            # only if not in venv
-            if not (
-                hasattr(sys, "base_prefix")
-                and sys.base_prefix != sys.prefix
-                or hasattr(sys, "real_prefix")
-                and getattr(sys, "real_prefix") != sys.prefix
-            ):
-                old_user_dir = os.path.join(os.path.expanduser("~"), ".thonny")
-                old_config_file = os.path.join(old_user_dir, "configuration.ini")
-                if os.path.exists(old_config_file):
-                    with open(old_config_file, "r", encoding="UTF-8") as fp:
-                        self._ini.read_file(fp)
-                        self.set_option("run.backend_name", "SameAsFrontend")
-
-                    # migrate user_logs
-                    # (I know, it's not proper place for this code, but ...)
-                    old_user_logs = os.path.join(old_user_dir, "user_logs")
-                    new_user_logs = os.path.join(THONNY_USER_DIR, "user_logs")
-                    if os.path.exists(old_user_logs) and not os.path.exists(new_user_logs):
-                        try:
-                            import shutil
-
-                            shutil.copytree(old_user_logs, new_user_logs)
-                        except Exception as e:
-                            logger.exception("Problem migrating user logs", exc_info=e)
 
         if not self.get_option("general.configuration_creation_timestamp"):
             self.set_option(
@@ -177,13 +138,16 @@ class ConfigurationManager:
             elif isinstance(value, str):
                 var = tk.StringVar(value=value)
             elif isinstance(value, float):
-                var = tk.StringVar(value=value)
+                var = tk.DoubleVar(value=value)
             else:
                 raise KeyError(
                     "Can't create Tk Variable for " + name + ". Type is " + str(type(value))
                 )
             self._variables[name] = var
             return var
+
+    def get_snapshot(self) -> Dict[str, Any]:
+        return {name: self.get_option(name) for name in self._defaults}
 
     def save(self):
         # save all tk variables

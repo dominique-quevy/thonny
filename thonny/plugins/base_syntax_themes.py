@@ -46,6 +46,7 @@ def default_light() -> SyntaxThemeSettings:
         "function_call": {},
         "method_call": {},
         "hyperlink": {"foreground": "#3A66DD", "underline": True},
+        "name_link": {"underline": True},
         # paren matcher
         "surrounding_parens": {"foreground": "Blue", "font": "BoldEditorFont"},
         "unclosed_expression": {"background": "LightGray"},
@@ -176,6 +177,7 @@ def default_dark() -> SyntaxThemeSettings:
         "function_call": {},
         "method_call": {},
         "hyperlink": {"foreground": "#619DC7", "underline": True},
+        "name_link": {"underline": True},
         # paren matcher
         "surrounding_parens": {"foreground": "#F0995B", "font": "BoldEditorFont"},
         "unclosed_expression": {"background": "#000000"},
@@ -301,6 +303,17 @@ def default_dark_blue() -> SyntaxThemeSettings:
     }
 
 
+def default_sepia() -> SyntaxThemeSettings:
+    from copy import deepcopy
+
+    result = deepcopy(default_light())
+    result["TEXT"]["background"] = "#F7F6F0"
+    result["GUTTER"]["background"] = "#E9E8DC"
+    result["current_line"]["background"] = "#efeee8"
+    result["unclosed_expression"]["background"] = "#d6d5cf"
+    return result
+
+
 def idle_classic() -> SyntaxThemeSettings:
     string_fg = "#00aa00"
     return {
@@ -414,6 +427,7 @@ def zenburn() -> SyntaxThemeSettings:
 
 def load_plugin() -> None:
     get_workbench().add_syntax_theme("Default Light", None, default_light)
+    get_workbench().add_syntax_theme("Default Sepia", None, default_sepia)
     get_workbench().add_syntax_theme("Default Dark", None, default_dark)
     get_workbench().add_syntax_theme("Default Dark Green", "Default Dark", default_dark_green)
     get_workbench().add_syntax_theme("Default Dark Blue", "Default Dark", default_dark_blue)
@@ -424,4 +438,4 @@ def load_plugin() -> None:
     # Comments in IDLE Dark really hurt the eyes
     # get_workbench().add_syntax_theme("IDLE Dark", "Default Dark", idle_dark)
 
-    get_workbench().set_default("view.syntax_theme", "Default Light")
+    get_workbench().set_default("view.syntax_theme", get_workbench().get_default_syntax_theme())

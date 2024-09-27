@@ -7,7 +7,12 @@ CHAIN="~/Library/Keychains/login.keychain-db"
 
 # NB! It looks like the signing order matters for notarization
 # Also, it looks like any problem within the framework is also reported as problem
-# with main lib (Python.framework/Versions/3.9/Python)
+# with main lib (Python.framework/Versions/3.12/Python)
+
+rm -r build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/_CodeSignature
+rm -r build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/_CodeSignature
+find build -name ".DS_Store" -delete
+
 
 #echo "1 - libs"
 codesign -s "$SIGN_ID" --force --timestamp --keychain $CHAIN \
@@ -22,56 +27,56 @@ codesign -s "$SIGN_ID" --force --timestamp --keychain $CHAIN \
 	$(find build/Thonny.app -type f -name "*python.o")
 
 #spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/Python
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/bin/python3.9
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Python
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/bin/python3.12
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python
 
 #echo "2 - bins"
 codesign -s "$SIGN_ID" --force --timestamp --keychain $CHAIN \
 	--entitlements thonny.entitlements --options runtime \
-	build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/bin/python3.9
+	build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/bin/python3.12
 #spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/Python
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/bin/python3.9
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Python
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/bin/python3.12
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python
 
 #echo "3 - Py.app launcher"
 codesign -s "$SIGN_ID" --force --timestamp --keychain $CHAIN \
 	--entitlements thonny.entitlements --options runtime \
-	build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python
+	build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python
 #spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/Python
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/bin/python3.9
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Python
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/bin/python3.12
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python
 
 #echo "4 - main lib" seems to equal to signing the framework
 #codesign -s "$SIGN_ID" --force --timestamp --keychain $CHAIN \
 #	--entitlements thonny.entitlements --options runtime \
-#	build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/Python 
+#	build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Python
 #spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/Python
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/bin/python3.9
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Python
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/bin/python3.12
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python
 
 # Seems to be covered by signing Thonny.app 
 #echo "5 - Py app" 
 #codesign -s "$SIGN_ID" --force --timestamp --keychain $CHAIN \
 #	--entitlements thonny.entitlements --options runtime \
-#	build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/Resources/Python.app
+#	build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Resources/Python.app
 #spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/Python
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/bin/python3.9
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Python
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/bin/python3.12
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python
 
-# Seems to equal to signing main lib (Python.framework/Versions/3.9/Python)
+# Seems to equal to signing main lib (Python.framework/Versions/3.10/Python)
 #echo "6 - Framework" 
 codesign -s "$SIGN_ID" --force --timestamp --keychain $CHAIN \
 	--entitlements thonny.entitlements --options runtime \
 	build/Thonny.app/Contents/Frameworks/Python.framework 
 #spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/Python
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/bin/python3.9
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Python
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/bin/python3.12
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python
 
 
 #echo "7 - Thonny" 
@@ -80,7 +85,7 @@ codesign -s "$SIGN_ID" --force --timestamp --keychain $CHAIN \
 	build/Thonny.app
 	
 #spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/Python
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/bin/python3.9
-#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Python
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/bin/python3.12
+#spctl --assess -vvv build/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python
 

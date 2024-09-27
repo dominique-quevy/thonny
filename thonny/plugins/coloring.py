@@ -14,15 +14,16 @@ In Shell only current command entry is colored
 
 Regexes are adapted from idlelib
 """
-import logging
-import re
 
+import re
 import tkinter
+from logging import getLogger
+
 from thonny import get_workbench
 from thonny.codeview import CodeViewText
 from thonny.shell import ShellText
 
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
 
 TODO = "COLOR_TODO"
 
@@ -42,16 +43,16 @@ class SyntaxColorer:
             BUILTIN,
             COMMENT,
             COMMENT_WITH_Q3DELIMITER,
+            FUNCTION_CALL,
             KEYWORD,
             MAGIC_COMMAND,
+            METHOD_CALL,
             NUMBER,
             STRING3,
             STRING3_DELIMITER,
             STRING_CLOSED,
             STRING_OPEN,
             TAB,
-            FUNCTION_CALL,
-            METHOD_CALL,
         )
 
         self.uniline_regex = re.compile(
@@ -76,7 +77,7 @@ class SyntaxColorer:
             + FUNCTION_CALL
             + "|"
             + METHOD_CALL,
-            re.S,  # @UndefinedVariable
+            re.DOTALL | re.MULTILINE,
         )
 
         # need to notice triple-quotes inside comments and magic commands

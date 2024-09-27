@@ -1,3 +1,5 @@
-from thonny import launch
+from thonny import report_time
+from thonny.main import run
 
-launch()
+report_time("Before launch")
+run()

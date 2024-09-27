@@ -5,7 +5,7 @@ import subprocess
 import sys
 
 
-def run_in_terminal(cmd, cwd, env_overrides={}, keep_open=True, title=None):
+def run_in_terminal(cmd, cwd, env_overrides={}, keep_open=True, title: str = None):
     from thonny.running import get_environment_with_overrides
 
     env = get_environment_with_overrides(env_overrides)
@@ -13,11 +13,11 @@ def run_in_terminal(cmd, cwd, env_overrides={}, keep_open=True, title=None):
     if not cwd or not os.path.exists(cwd):
         cwd = os.getcwd()
 
-    if platform.system() == "Windows":
-        _run_in_terminal_in_windows(cmd, cwd, env, keep_open, title)
-    elif platform.system() == "Linux":
+    if sys.platform == "win32":
+        _run_in_terminal_in_windows(cmd, cwd, env, keep_open)
+    elif sys.platform == "linux":
         _run_in_terminal_in_linux(cmd, cwd, env, keep_open)
-    elif platform.system() == "Darwin":
+    elif sys.platform == "darwin":
         _run_in_terminal_in_macos(cmd, cwd, env_overrides, keep_open)
     else:
         raise RuntimeError("Can't launch terminal in " + platform.system())
@@ -28,12 +28,12 @@ def open_system_shell(cwd, env_overrides={}):
 
     env = get_environment_with_overrides(env_overrides)
 
-    if platform.system() == "Darwin":
+    if sys.platform == "darwin":
         _run_in_terminal_in_macos([], cwd, env_overrides, True)
-    elif platform.system() == "Windows":
-        cmd = "start cmd"
+    elif sys.platform == "win32":
+        cmd = "start " + _get_windows_terminal_command()
         subprocess.Popen(cmd, cwd=cwd, env=env, shell=True)
-    elif platform.system() == "Linux":
+    elif sys.platform == "linux":
         cmd = _get_linux_terminal_command()
         subprocess.Popen(cmd, cwd=cwd, env=env, shell=True)
     else:
@@ -46,7 +46,7 @@ def _add_to_path(directory, path):
     # it probably won't be in path yet and therefore will be prepended.
     if (
         directory in path.split(os.pathsep)
-        or platform.system() == "Windows"
+        or sys.platform == "win32"
         and directory.lower() in path.lower().split(os.pathsep)
     ):
         return path
@@ -54,14 +54,10 @@ def _add_to_path(directory, path):
         return directory + os.pathsep + path
 
 
-def _run_in_terminal_in_windows(cmd, cwd, env, keep_open, title=None):
+def _run_in_terminal_in_windows(cmd, cwd, env, keep_open):
     if keep_open:
-        # Yes, the /K argument has weird quoting. Can't explain this, but it works
-        quoted_args = " ".join(map(lambda s: s if s == "&" else '"' + s + '"', cmd))
-        cmd_line = """start {title} /D "{cwd}" /W cmd /K "{quoted_args}" """.format(
-            cwd=cwd, quoted_args=quoted_args, title='"' + title + '"' if title else ""
-        )
-
+        term_cmd = _get_windows_terminal_command()
+        cmd_line = ["start", term_cmd, "-NoExit", "-Command"] + cmd
         subprocess.Popen(cmd_line, cwd=cwd, env=env, shell=True)
     else:
         subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE, cwd=cwd, env=env)
@@ -130,7 +126,7 @@ def _run_in_terminal_in_macos(cmd, cwd, env_overrides, keep_open):
 
     common_prefix = os.path.normpath(sys.prefix).rstrip("/")
     cmds = (
-        "export THOPR=" + common_prefix + " ; " + cmds.replace(common_prefix + "/", "$THOPR" + "/")
+        " export THOPR=" + common_prefix + " ; " + cmds.replace(common_prefix + "/", "$THOPR" + "/")
     )
     print(cmds)
 
@@ -172,6 +168,17 @@ def _run_in_terminal_in_macos(cmd, cwd, env_overrides, keep_open):
     )
 
     subprocess.Popen(cmd_line, cwd=cwd, shell=True)
+
+
+def _get_windows_terminal_command():
+    import shutil
+
+    if shutil.which("pwsh"):
+        # PowerShell version 6+
+        return "pwsh"
+    else:
+        # Windows PowerShell 5.1
+        return "powershell"
 
 
 def _get_linux_terminal_command():

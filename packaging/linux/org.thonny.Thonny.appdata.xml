@@ -6,6 +6,7 @@
   <project_license>MIT</project_license>
   <name>Thonny</name>
   <summary>Python IDE for beginners</summary>
+  <developer_name>Aivar Annamaa</developer_name>
 
   <description>
     <p>Thonny is a simple Python IDE with features useful for learning programming.
@@ -15,14 +16,6 @@
     and special mode for learning about references.</p>
     <p>See the homepage for more information, screenshots and a walk-through video.</p>
   </description>
-  
-  <categories>
-    <category>Development</category>
-    <category>Education</category>
-    <category>Debugger</category>
-    <category>IDE</category>
-    <category>ComputerScience</category>
-  </categories>
   
   <launchable type="desktop-id">org.thonny.Thonny.desktop</launchable>
 
@@ -44,6 +37,69 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="4.1.6" date="2024-09-11">
+      <description>
+        <p>
+          Bug-fix release.
+        </p>
+      </description>
+    </release>
+    <release version="4.1.4" date="2023-11-19">
+      <description>
+        <p>
+          Bug-fix release.
+        </p>
+      </description>
+    </release>
+    <release version="4.1.3" date="2023-09-28">
+      <description>
+        <p>
+          Bug-fix release.
+        </p>
+      </description>
+    </release>
+    <release version="4.1.2" date="2023-08-12">
+      <description>
+        <p>
+          Bug-fix release.
+        </p>
+      </description>
+    </release>
+    <release version="4.1.1" date="2023-06-11">
+      <description>
+        <p>
+          Bug-fix release.
+        </p>
+      </description>
+    </release>
+    <release version="4.1.0" date="2023-06-03">
+      <description>
+        <p>
+          Feature and bug-fix release.
+        </p>
+      </description>
+    </release>
+    <release version="4.1.0~b1" date="2023-04-23">
+      <description>
+        <p>
+          Feature pre-release.
+        </p>
+      </description>
+    </release>
+    <release version="4.0.1" date="2022-09-11">
+      <description>
+        <p>
+          Bug-fix release.
+        </p>
+      </description>
+    </release>
+    <release version="4.0.0" date="2022-08-22">
+      <description>
+        <p>
+          Feature release.
+        </p>
+      </description>
+    </release>
     <release version="3.3.14" date="2021-08-01">
       <description>
         <p>

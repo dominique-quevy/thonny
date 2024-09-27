@@ -3,16 +3,15 @@
 """
 Adds debugging commands and features.
 """
-
 import ast
-import logging
 import os.path
 import tkinter as tk
+import tokenize
+from _tkinter import TclError
+from logging import getLogger
 from tkinter import ttk
 from tkinter.messagebox import showinfo
 from typing import List, Union  # @UnusedImport
-
-from _tkinter import TclError
 
 from thonny import (
     ast_utils,
@@ -26,13 +25,14 @@ from thonny import (
 )
 from thonny.codeview import CodeView, SyntaxText, get_syntax_options_for_tag
 from thonny.common import DebuggerCommand, InlineCommand
+from thonny.custom_notebook import CustomNotebook
 from thonny.languages import tr
 from thonny.memory import VariablesFrame
 from thonny.misc_utils import running_on_mac_os, running_on_rpi, shorten_repr
 from thonny.tktextext import TextFrame
-from thonny.ui_utils import CommonDialog, select_sequence
-from thonny.ui_utils import select_sequence, CommonDialog, get_tk_version_info
-from _tkinter import TclError
+from thonny.ui_utils import CommonDialog, get_hyperlink_cursor, get_tk_version_info, select_sequence
+
+logger = getLogger(__name__)
 
 _current_debugger = None
 
@@ -50,7 +50,7 @@ class Debugger:
         self._last_debugger_command = cmd
 
         if get_runner().is_waiting_debugger_command():
-            logging.debug("_check_issue_debugger_command: %s", cmd)
+            logger.debug("_check_issue_debugger_command: %s", cmd)
 
             # tell MainCPythonBackend the state we are seeing
             cmd.setdefault(
@@ -70,7 +70,7 @@ class Debugger:
             if command == "resume":
                 self.clear_last_frame()
         else:
-            logging.debug("Bad state for sending debugger command " + str(command))
+            logger.debug("Bad state for sending debugger command " + str(command))
 
     def get_run_to_cursor_breakpoint(self):
         return None
@@ -227,9 +227,11 @@ class SingleWindowDebugger(Debugger):
                 frame_info.locals,
                 frame_info.globals,
                 frame_info.freevars,
-                frame_info.module_name
-                if frame_info.code_name == "<module>"
-                else frame_info.code_name,
+                (
+                    frame_info.module_name
+                    if frame_info.code_name == "<module>"
+                    else frame_info.code_name
+                ),
             )
 
     def handle_debugger_return(self, msg):
@@ -354,9 +356,13 @@ class FrameVisualizer:
         self._frame_id = frame_info.id
         self._filename = frame_info.filename
         self._firstlineno = None
-        if running_on_mac_os():
+        if running_on_mac_os() and get_tk_version_info() < (8, 6, 11):
+            # Older Tk versions had glitch with placement of the expression box
+            # (closed box was not cleaned up)
             self._expression_box = ToplevelExpressionBox(text_frame)
         else:
+            # since 8.6.11 Tk on macOS has glitch with ToplevelExpressionBox
+            # (bad z-index)
             self._expression_box = PlacedExpressionBox(text_frame)
 
         self._note_box = ui_utils.NoteBox(text_frame.winfo_toplevel())
@@ -461,7 +467,7 @@ class FrameVisualizer:
             if frame_info.current_statement is not None:
                 self._tag_range(frame_info.current_statement, stmt_tag)
             else:
-                logging.warning("Missing current_statement: %s", frame_info)
+                logger.warning("Missing current_statement: %s", frame_info)
 
         self._expression_box.update_expression(msg, frame_info)
 
@@ -641,13 +647,12 @@ class BaseExpressionBox:
         event = frame_info.event
 
         if frame_info.current_root_expression is not None:
-
             if self._last_root_expression != frame_info.current_root_expression:
                 # can happen, eg. when focus jumps from the last expr in while body
                 # to while test expression
                 self.clear_debug_view()
 
-            with open(frame_info.filename, "rb") as fp:
+            with tokenize.open(frame_info.filename) as fp:
                 whole_source = fp.read()
 
             lines = whole_source.splitlines()
@@ -728,13 +733,13 @@ class BaseExpressionBox:
             lambda _: get_workbench().event_generate("ObjectSelect", object_id=value.id),
         )
 
-    def _load_expression(self, whole_source, filename, text_range):
-
+    def _load_expression(self, whole_source: str, filename, text_range):
+        assert isinstance(whole_source, str)
         root = ast_utils.parse_source(whole_source, filename)
         main_node = ast_utils.find_expression(root, text_range)
 
         source = ast_utils.extract_text_range(whole_source, text_range)
-        logging.debug("EV.load_exp: %s", (text_range, main_node, source))
+        logger.debug("EV.load_exp: %s", (text_range, main_node, source))
 
         self._clear_expression()
 
@@ -782,7 +787,7 @@ class BaseExpressionBox:
         )
 
     def _highlight_range(self, text_range, state, has_exception):
-        logging.debug("EV._highlight_range: %s", text_range)
+        logger.debug("EV._highlight_range: %s", text_range)
         self.text.tag_remove("after", "1.0", "end")
         self.text.tag_remove("before", "1.0", "end")
         self.text.tag_remove("exception", "1.0", "end")
@@ -939,6 +944,7 @@ class DialogVisualizer(CommonDialog, FrameVisualizer):
 
         self._load_code(frame_info)
         self._text_frame.text.focus()
+        self.wm_deiconify()
         self.update()
 
     def _init_layout_widgets(self, master, frame_info):
@@ -948,18 +954,17 @@ class DialogVisualizer(CommonDialog, FrameVisualizer):
         self.main_frame.grid(sticky=tk.NSEW)
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
-        self.main_pw = ui_utils.AutomaticPanedWindow(self.main_frame, orient=tk.VERTICAL)
+        self.main_pw = ui_utils.WorkbenchPanedWindow(self.main_frame, orient=tk.VERTICAL)
         self.main_pw.grid(sticky=tk.NSEW, padx=10, pady=10)
         self.main_frame.rowconfigure(0, weight=1)
         self.main_frame.columnconfigure(0, weight=1)
 
-        self._code_book = ttk.Notebook(self.main_pw)
+        self._code_book = CustomNotebook(self.main_pw, closable=False)
         self._text_frame = CodeView(
             self._code_book, first_line_number=frame_info.firstlineno, font="EditorFont"
         )
         self._code_book.add(self._text_frame, text=tr("Source code"))
-        self.main_pw.add(self._code_book, minsize=200)
-        self._code_book.preferred_size_in_pw = 400
+        self.main_pw.add(self._code_book, minsize=200, height=400)
 
     def _load_code(self, frame_info):
         self._text_frame.set_content(frame_info.source)
@@ -996,11 +1001,10 @@ class FunctionCallDialog(DialogVisualizer):
 
     def _init_layout_widgets(self, master, frame_info):
         DialogVisualizer._init_layout_widgets(self, master, frame_info)
-        self._locals_book = ttk.Notebook(self.main_pw)
+        self._locals_book = CustomNotebook(self.main_pw, closable=False)
         self._locals_frame = VariablesFrame(self._locals_book)
-        self._locals_book.preferred_size_in_pw = 200
         self._locals_book.add(self._locals_frame, text=tr("Local variables"))
-        self.main_pw.add(self._locals_book, minsize=100)
+        self.main_pw.add(self._locals_book, minsize=100, height=200)
 
     def _load_code(self, frame_info):
         DialogVisualizer._load_code(self, frame_info)
@@ -1123,7 +1127,6 @@ class ExceptionView(TextFrame):
 
         self.text.configure(foreground=get_syntax_options_for_tag("stderr")["foreground"])
         for line, frame_id, filename, lineno in exception_lines_with_frame_info:
-
             if frame_id is not None:
                 frame_tag = "frame_%d" % frame_id
 
@@ -1157,7 +1160,7 @@ class ExceptionView(TextFrame):
             self.set_exception(None)
 
     def _hyperlink_enter(self, event):
-        self.text.config(cursor="hand2")
+        self.text.config(cursor=get_hyperlink_cursor())
 
     def _hyperlink_leave(self, event):
         self.text.config(cursor="")
@@ -1181,7 +1184,8 @@ def _start_debug_enabled():
     return (
         _current_debugger is None
         and get_workbench().get_editor_notebook().get_current_editor() is not None
-        and "debug" in get_runner().get_supported_features()
+        and get_runner().get_backend_proxy()
+        and get_runner().get_backend_proxy().can_debug()
     )
 
 
@@ -1276,7 +1280,6 @@ def run_preferred_debug_command():
 
 
 def load_plugin() -> None:
-
     global RESUME_COMMAND_CAPTION
     RESUME_COMMAND_CAPTION = tr("Resume")
 

@@ -1,70 +1,78 @@
+import logging
 import os.path
 import tkinter as tk
+from abc import ABC, abstractmethod
 from tkinter import ttk
-from typing import Union
+from typing import List, Optional
 
-from thonny import get_runner, get_workbench, ui_utils
+from thonny import get_workbench, ui_utils
 from thonny.backend import delete_stored_ssh_password, get_ssh_password_file_path
-from thonny.config_ui import ConfigurationPage
+from thonny.config_ui import (
+    ConfigurationPage,
+    add_option_checkbox,
+    add_option_combobox,
+    add_option_entry,
+    add_vertical_separator,
+)
 from thonny.languages import tr
 from thonny.misc_utils import (
+    PASSWORD_METHOD,
     PUBLIC_KEY_NO_PASS_METHOD,
     PUBLIC_KEY_WITH_PASS_METHOD,
-    PASSWORD_METHOD,
 )
-from thonny.ui_utils import create_string_var, ems_to_pixels, CommonDialogEx
+from thonny.running import BackendProxy
+from thonny.ui_utils import CommonDialogEx, create_string_var, ems_to_pixels
+
+logger = logging.getLogger(__name__)
 
 
-class BackendDetailsConfigPage(ConfigurationPage):
-    def should_restart(self):
+class BackendDetailsConfigPage(ConfigurationPage, ABC):
+    backend_name: Optional[str] = None  # Will be overwritten on Workbench.add_backend
+    proxy_class: Optional[type[BackendProxy]] = None  # ditto
+
+    @abstractmethod
+    def should_restart(self, changed_options: List[str]) -> bool:
         raise NotImplementedError()
 
-    def _on_change(self):
-        pass
-
-    def _add_text_field(
-        self, label_text, variable_name, row, show=None, pady: Union[int, tuple] = 0, width=None
-    ):
-
-        if isinstance(pady, int):
-            pady = (pady, pady)
-
-        entry_label = ttk.Label(self, text=label_text)
-        entry_label.grid(row=row, column=0, sticky="w", pady=pady)
-
-        variable = create_string_var(get_workbench().get_option(variable_name), self._on_change)
-        entry = ttk.Entry(self, textvariable=variable, show=show, width=width)
-        entry.grid(row=row, column=1, sticky="we", pady=pady, padx=ems_to_pixels(1))
-        return variable
-
-    def _add_combobox_field(
-        self, label_text, variable_name, row, options, pady: Union[int, tuple] = 0, width=None
-    ):
-        if isinstance(pady, int):
-            pady = (pady, pady)
-
-        label = ttk.Label(self, text=label_text)
-        label.grid(row=row, column=0, sticky="w", pady=pady)
-
-        variable = create_string_var(get_workbench().get_option(variable_name), self._on_change)
-        return self.add_combobox(
-            variable, options, row=row, column=1, pady=pady, padx=ems_to_pixels(1), width=width
-        )
+    @abstractmethod
+    def get_new_machine_id(self) -> str:
+        raise NotImplementedError
 
 
-class OnlyTextConfigurationPage(BackendDetailsConfigPage):
-    def __init__(self, master, text):
+class TabbedBackendDetailsConfigurationPage(BackendDetailsConfigPage):
+    def __init__(self, master):
         super().__init__(master)
-        label = ttk.Label(self, text=text)
-        label.grid()
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
 
-    def should_restart(self):
-        return False
+        self.notebook = ttk.Notebook(self)
+        self.notebook.grid(row=0, column=0, sticky="nsew")
+
+    def create_and_add_empty_page(self, caption: str, weighty_column=1) -> ttk.Frame:
+        page = ttk.Frame(self.notebook, padding=self.get_tab_content_padding())
+        page.columnconfigure(weighty_column, weight=1)
+        self.notebook.add(page, text=caption)
+        return page
+
+    def create_and_add_stubs_page(self, proxy_class: type[BackendProxy]) -> ttk.Frame:
+        from thonny.plugins.pip_gui import StubsPipFrame
+
+        page = StubsPipFrame(self.notebook, proxy_class, padding=self.get_tab_content_padding())
+        self.notebook.add(page, text=tr("Type stubs"))
+        return page
+
+    def get_tab_content_padding(self) -> List[int]:
+        return [
+            ems_to_pixels(1),
+            ems_to_pixels(0.5),
+            ems_to_pixels(1),
+            ems_to_pixels(0.5),
+        ]
 
 
 class BackendConfigurationPage(ConfigurationPage):
     def __init__(self, master):
-        ConfigurationPage.__init__(self, master)
+        super().__init__(master)
 
         self._backend_specs_by_desc = {
             spec.description: spec for spec in get_workbench().get_backends().values()
@@ -81,7 +89,7 @@ class BackendConfigurationPage(ConfigurationPage):
         self._combo_variable = create_string_var(current_backend_desc)
 
         label = ttk.Label(
-            self, text=tr("Which interpreter or device should Thonny use for running your code?")
+            self, text=tr("Which kind of interpreter should Thonny use for running your code?")
         )
         label.grid(row=0, column=0, columnspan=2, sticky=tk.W)
 
@@ -89,21 +97,19 @@ class BackendConfigurationPage(ConfigurationPage):
             self._backend_specs_by_desc.values(), key=lambda x: x.sort_key
         )
 
-        self._combo = ttk.Combobox(
+        self._combo = ui_utils.MappingCombobox(
             self,
             exportselection=False,
-            textvariable=self._combo_variable,
-            values=[spec.description for spec in sorted_backend_specs],
+            value_variable=self._combo_variable,
+            mapping={spec.description: spec.description for spec in sorted_backend_specs},
             height=25,
         )
-
         self._combo.grid(row=1, column=0, columnspan=2, sticky=tk.NSEW, pady=(0, 10))
-        self._combo.state(["!disabled", "readonly"])
 
-        self.labelframe = ttk.LabelFrame(self, text=" " + tr("Details") + " ")
-        self.labelframe.grid(row=2, column=0, sticky="nsew")
-        self.labelframe.columnconfigure(0, weight=1)
-        self.labelframe.rowconfigure(0, weight=1)
+        self.content_frame = ttk.Frame(self)
+        self.content_frame.grid(row=2, column=0, sticky="nsew")
+        self.content_frame.columnconfigure(0, weight=1)
+        self.content_frame.rowconfigure(0, weight=1)
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
@@ -122,60 +128,75 @@ class BackendConfigurationPage(ConfigurationPage):
         page = self._get_conf_page(backend_desc)
 
         if page != self._current_page:
-
             if self._current_page is not None:
                 self._current_page.grid_forget()
 
-            page.grid(sticky="nsew", padx=10, pady=5)
+            page.grid(sticky="nsew", row=0, column=0, padx=0, pady=0)
             self._current_page = page
+            backend_name = self._backend_specs_by_desc[backend_desc].name
+            get_workbench().set_option("run.backend_name", backend_name)
 
     def _get_conf_page(self, backend_desc):
         if backend_desc not in self._conf_pages:
             cp_constructor = self._backend_specs_by_desc[backend_desc].config_page_constructor
-            if isinstance(cp_constructor, str):
-                self._conf_pages[backend_desc] = OnlyTextConfigurationPage(
-                    self.labelframe, cp_constructor
-                )
-            else:
-                assert issubclass(cp_constructor, ConfigurationPage)
-                self._conf_pages[backend_desc] = cp_constructor(self.labelframe)
+            self._conf_pages[backend_desc] = cp_constructor(self.content_frame)
 
         return self._conf_pages[backend_desc]
 
-    def apply(self):
+    def apply(self, changed_options: List[str]) -> bool:
         if self._current_page is None:
-            return None
+            logger.warning("No current page")
+            return True
 
-        result = self._current_page.apply()
+        result = self._current_page.apply(changed_options)
 
         if result is False:
+            logger.info("Backend page %r responded False to apply")
             return False
 
-        backend_desc = self._combo_variable.get()
-        backend_name = self._backend_specs_by_desc[backend_desc].name
-        get_workbench().set_option("run.backend_name", backend_name)
+        # should_restart did not accept changed_options parameter before 5.0
+        from inspect import signature
 
-        if getattr(self._combo_variable, "modified") or self._current_page.should_restart():
+        if len(signature(self._current_page.should_restart).parameters) > 0:
+            should_restart_same_backend = self._current_page.should_restart(changed_options)
+        else:
+            should_restart_same_backend = self._current_page.should_restart()
+
+        if getattr(self._combo_variable, "modified") or should_restart_same_backend:
+            logger.info("Should restart")
+
+            could_close = (
+                get_workbench()
+                .get_editor_notebook()
+                .try_close_remote_files_from_another_machine(
+                    self.winfo_toplevel(), self._current_page.get_new_machine_id()
+                )
+            )
+
+            if not could_close:
+                logger.info("Can't apply because of open remote files of wrong machine")
+                return False
+
             self.dialog.backend_restart_required = True
+        else:
+            logger.info("Should not restart")
 
-        return None
+        return True
 
 
-class BaseSshProxyConfigPage(BackendDetailsConfigPage):
-    backend_name = None  # Will be overwritten on Workbench.add_backend
-
-    def __init__(self, master, conf_group):
+class BaseSshProxyConfigPage(TabbedBackendDetailsConfigurationPage):
+    def __init__(self, master):
         super().__init__(master)
-        self._changed = False
-        self._conf_group = conf_group
+        self.connection_page = self.create_and_add_empty_page(tr("Connection"))
+        self.options_page = self.create_and_add_empty_page(tr("Options"))
+        self._init_connection_page()
+        self._init_options_page()
 
-        inner_pad = ems_to_pixels(0.6)
+    def _init_connection_page(self):
 
-        self._host_var = self._add_text_field(
-            "Host", self._conf_group + ".host", 1, pady=(0, inner_pad), width=20
-        )
-        self._user_var = self._add_text_field(
-            "Username", self._conf_group + ".user", 3, pady=(0, inner_pad), width=20
+        add_option_entry(self.connection_page, self.backend_name + ".host", tr("Host"), width=20)
+        add_option_entry(
+            self.connection_page, self.backend_name + ".user", tr("Username"), width=20
         )
 
         from thonny.misc_utils import (
@@ -184,41 +205,54 @@ class BaseSshProxyConfigPage(BackendDetailsConfigPage):
             PUBLIC_KEY_WITH_PASS_METHOD,
         )
 
-        self._method_var = self._add_combobox_field(
-            "Authentication method",
-            self._conf_group + ".auth_method",
-            5,
-            [PASSWORD_METHOD, PUBLIC_KEY_NO_PASS_METHOD, PUBLIC_KEY_WITH_PASS_METHOD],
-            pady=(0, inner_pad),
+        add_option_combobox(
+            self.connection_page,
+            self.backend_name + ".auth_method",
+            tr("Authentication method"),
+            choices=[PASSWORD_METHOD, PUBLIC_KEY_NO_PASS_METHOD, PUBLIC_KEY_WITH_PASS_METHOD],
             width=30,
         )
-        self._interpreter_var = self._add_text_field(
+        interpreter_entry = add_option_entry(
+            self.connection_page,
+            self.backend_name + ".executable",
             "Interpreter",
-            self._conf_group + ".executable",
-            30,
-            pady=(2 * inner_pad, inner_pad),
             width=30,
         )
 
-    def _on_change(self):
-        self._changed = True
+        if not self.has_editable_interpreter():
+            interpreter_entry.configure(state="disabled")
 
-    def apply(self):
-        if self._changed:
-            get_workbench().set_option(self._conf_group + ".host", self._host_var.get())
-            get_workbench().set_option(self._conf_group + ".user", self._user_var.get())
-            get_workbench().set_option(self._conf_group + ".auth_method", self._method_var.get())
-            get_workbench().set_option(
-                self._conf_group + ".executable", self._interpreter_var.get()
-            )
+    def _init_options_page(self):
+        add_option_checkbox(
+            self.options_page,
+            f"{self.backend_name}.make_uploaded_shebang_scripts_executable",
+            tr("Make uploaded shebang scripts executable"),
+        )
 
+    def has_editable_interpreter(self) -> bool:
+        return True
+
+    def apply(self, changed_options: List[str]) -> bool:
+        if self.should_restart(changed_options):
             delete_stored_ssh_password()
-
             # reset cwd setting to default
-            get_workbench().set_option(self._conf_group + ".cwd", "")
+            get_workbench().set_option(self.backend_name + ".cwd", "")
 
-    def should_restart(self):
-        return self._changed
+        return True
+
+    def should_restart(self, changed_options: List[str]):
+        for option in [
+            self.backend_name + ".host",
+            self.backend_name + ".user",
+            self.backend_name + ".auth_method",
+            self.backend_name + ".executable",
+        ]:
+            if option in changed_options:
+                return True
+        return False
+
+    def get_new_machine_id(self) -> str:
+        return get_workbench().get_option(self.backend_name + ".host")
 
 
 class PasswordDialog(CommonDialogEx):
@@ -228,7 +262,7 @@ class PasswordDialog(CommonDialogEx):
         self.password = ""
         self.save_password = False
 
-        margin = self.get_padding()
+        margin = self.get_large_padding()
         spacing = margin // 2
 
         self.title(tr("Authentication"))
@@ -320,5 +354,5 @@ def load_plugin() -> None:
         "interpreter", tr("Interpreter"), BackendConfigurationPage, 20
     )
     get_workbench().add_command(
-        "select_interpreter", "run", tr("Select interpreter") + "...", select_device, group=1
+        "select_interpreter", "run", tr("Configure interpreter..."), select_device, group=1
     )

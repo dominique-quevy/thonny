@@ -1,365 +1,284 @@
-import logging
-import threading
 import os.path
+import sys
 import time
-import traceback
-import tkinter.font as tkfont
-import urllib.request
-from tkinter import ttk, messagebox
-from typing import Optional
-from urllib.request import urlopen
+from logging import getLogger
+from typing import Any, Dict, List, Optional, Set, Tuple
 
-from thonny import get_runner
+from thonny.common import UserError
 from thonny.languages import tr
-from thonny.misc_utils import list_volumes
-from thonny.plugins.micropython import (
-    BareMetalMicroPythonProxy,
-    list_serial_ports_with_descriptions,
-    list_serial_ports,
+from thonny.misc_utils import get_win_volume_name, list_volumes
+from thonny.plugins.micropython.base_flashing_dialog import (
+    BaseFlashingDialog,
+    TargetInfo,
+    family_code_to_name,
 )
-from thonny.ui_utils import (
-    set_text_if_different,
-    ems_to_pixels,
-)
-from thonny.workdlg import WorkDialog
+from thonny.plugins.micropython.mp_front import list_serial_ports
 
-logger = logging.getLogger(__name__)
-
-FAKE_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/35.0.1916.47 Safari/537.36"
+logger = getLogger(__name__)
 
 
-class Uf2FlashingDialog(WorkDialog):
-    def __init__(self, master):
-        self._release_info = None
-        self._possible_targets = []
-        super().__init__(master)
-        self._start_downloading_release_info()
+class Uf2FlashingDialog(BaseFlashingDialog):
+    def get_target_label(self) -> str:
+        return tr("Target volume")
 
-    def populate_main_frame(self):
-        pad = self.get_padding()
-        inpad = self.get_internal_padding()
+    def get_variants_url(self) -> str:
+        return f"https://raw.githubusercontent.com/thonny/thonny/master/data/{self.firmware_name.lower()}-variants-uf2.json"
 
-        latest_ver_caption = tr("Version to be installed")
-        version_caption_label = ttk.Label(self.main_frame, text=latest_ver_caption + ":")
-        version_caption_label.grid(
-            row=0, column=0, sticky="w", padx=(pad, inpad), pady=(pad, inpad)
+    def get_families_mapping(self) -> Dict[str, str]:
+        codes = ["rp2", "samd21", "samd51", "esp32s2", "esp32s3", "nrf52"]
+        return {family_code_to_name(code): code for code in codes}
+
+    def find_targets(self) -> Dict[str, TargetInfo]:
+        paths = [
+            vol
+            for vol in list_volumes(skip_letters=["A"])
+            if os.path.isfile(os.path.join(vol, self.get_info_file_name()))
+        ]
+
+        result = {}
+        for path in paths:
+            try:
+                target_info = self.create_target_info(path)
+                if target_info:
+                    result[target_info.title] = target_info
+            except Exception:
+                # the disk may have been ejected during read or smth like this
+                logger.exception("Could not create target info")
+
+        return result
+
+    def compute_target_info_text_and_label(self, target: TargetInfo) -> Tuple[str, str]:
+        if target.model:
+            if target.model == "Raspberry Pi RP2":
+                # too general to be called model
+                return "RP2", "family"
+            else:
+                text = target.model
+                if target.family:
+                    text += f"   ({family_code_to_name(target.family)})"
+                return text, "model"
+        elif target.board_id:
+            text = target.board_id
+            if target.family:
+                text += f"   ({family_code_to_name(target.family)})"
+            return text, "board id"
+        elif target.family:
+            return target.family, "family"
+        else:
+            return "Unknown board", "info"
+
+    def _variant_can_be_recommended_for_target(self, variant: Dict[str, Any], target: TargetInfo):
+        if target.family is None:
+            # Don't assume anything about unknown targets
+            return False
+
+        if not variant["family"].startswith(target.family):
+            return False
+
+        if target.model is None:
+            return False
+
+        # Compare set of words both with and without considering the possibility that one of them
+        # may have vendor name added and other not.
+        return _extract_normalized_words(target.model) == _extract_normalized_words(
+            variant["model"]
+        ) or _extract_normalized_words(
+            target.model + " " + variant["vendor"]
+        ) == _extract_normalized_words(
+            variant["model"] + " " + variant["vendor"]
         )
-        self._version_label = ttk.Label(self.main_frame, text=tr("please wait") + " ...")
-        self._version_label.grid(row=0, column=1, padx=(0, pad), pady=(pad, inpad), sticky="w")
 
-        device_location_caption = tr("Target device location")
-        self.target_caption_label = ttk.Label(self.main_frame, text=device_location_caption + ":")
-        self.target_caption_label.grid(
-            row=1, column=0, padx=(pad, inpad), pady=(0, inpad), sticky="w"
+    def create_target_info(self, path: str) -> Optional[TargetInfo]:
+        info_path = os.path.join(path, self.get_info_file_name())
+        assert os.path.isfile(info_path)
+        with open(info_path, encoding="utf-8") as fp:
+            info_content = fp.read()
+        info_lines = info_content.splitlines()
+        normalized_content = info_content.lower().replace(" ", "").replace("_", "").replace("-", "")
+
+        model = find_uf2_property(info_lines, "Model")
+        board_id = find_uf2_property(info_lines, "Board-ID")
+
+        if "boardid:rpirp2" in normalized_content:
+            family = "rp2"
+        else:
+            for keyword in ["samd21", "samd51", "nrf51", "nrf52", "esp32s3", "esp32s3"]:
+                if keyword in normalized_content:
+                    family = keyword
+                    break
+            else:
+                family = None
+
+        return TargetInfo(
+            title=create_volume_description(path),
+            path=path,
+            family=family,
+            model=model,
+            board_id=board_id,
+            port=None,
         )
 
-        # add width, so that this label prescribes the width of the dialog and it doesn't grow
-        # when the progressbar and action text are gridded
-        self.target_label = ttk.Label(self.main_frame, text="", width=self.get_info_text_width())
-        self.target_label.grid(row=1, column=1, padx=(0, pad), pady=(0, inpad), sticky="w")
-
-        device_model_caption = tr("Target device model")
-        self.model_caption_label = ttk.Label(self.main_frame, text=device_model_caption + ":")
-        self.model_caption_label.grid(
-            row=2, column=0, padx=(pad, inpad), pady=(0, inpad), sticky="w"
-        )
-        self.model_label = ttk.Label(self.main_frame, text="", width=self.get_info_text_width())
-        self.model_label.grid(row=2, column=1, padx=(0, pad), pady=(0, inpad), sticky="w")
-
-        # Resize progress bar to align with this grid
-        default_font = tkfont.nametofont("TkDefaultFont")
-        max_caption_len = max(
-            [
-                default_font.measure(caption + ":")
-                for caption in [latest_ver_caption, device_location_caption, device_model_caption]
-            ]
-        )
-        self._progress_bar["length"] = max_caption_len
-
-    def get_info_text_width(self):
-        return 40
-
-    def get_action_text_max_length(self):
-        return 20
+    def get_info_file_name(self):
+        return "INFO_UF2.TXT"
 
     def get_instructions(self) -> Optional[str]:
         return (
-            "This dialog allows you to install or update MicroPython on your device.\n"
-            "\n"
-            "1. Put your device into bootloader mode.\n"
-            "2. Wait until device information appears.\n"
-            "3. Click 'Install' and wait for some seconds until done.\n"
-            "4. Close the dialog and start programming!"
+            tr(
+                "Here you can install or update %s for devices having an UF2 bootloader\n"
+                "(this includes most boards meant for beginners).\n"
+                "\n"
+                "1. Put your device into bootloader mode: \n"
+                "     - some devices have to be plugged in while holding the BOOTSEL button,\n"
+                "     - some require double-tapping the RESET button with proper rhythm.\n"
+                "2. Wait for couple of seconds until the target volume appears.\n"
+                "3. Select desired variant and version.\n"
+                "4. Click 'Install' and wait for some seconds until done.\n"
+                "5. Close the dialog and start programming!"
+            )
+            % self.firmware_name
         )
 
-    def get_ok_text(self):
-        return tr("Install")
+    def get_title(self):
+        return tr("Install or update %s (UF2)") % self.firmware_name
 
-    def _get_release_info_url(self):
-        raise NotImplementedError()
+    def perform_core_operation(
+        self,
+        source_path: Optional[str],
+        variant_info: Optional[Dict[str, Any]],
+        download_info: Optional[Dict[str, str]],
+        target_info: Optional[TargetInfo],
+        work_options: Dict[str, Any],
+    ) -> bool:
+        assert source_path
+        assert variant_info
+        assert download_info
+        assert target_info
 
-    def _start_downloading_release_info(self):
-        self._release_info = None  # invalidate last info if downloading again
-        threading.Thread(target=self._download_release_info, daemon=True).start()
+        """Running in a bg thread"""
+        size = os.path.getsize(source_path)
+        target_path = os.path.join(target_info.path, os.path.basename(source_path))
 
-    def _download_release_info(self):
-        import json
-        from urllib.request import urlopen
+        logger.debug("Copying from %s to %s", source_path, target_path)
 
-        try:
-            req = urllib.request.Request(
-                self._get_release_info_url(),
-                data=None,
-                headers={
-                    "User-Agent": FAKE_USER_AGENT,
-                    "Cache-Control": "no-cache",
-                },
-            )
-            with urlopen(req) as fp:
-                json_str = fp.read().decode("UTF-8")
-                logger.debug("Release info: %r", json_str)
-                self._release_info = json.loads(json_str)
-                if self._release_info.get("message", "") == "Not Found":
-                    self._release_info = None
-        except Exception as e:
-            self.append_text("Could not find release info from %s\n" % self._get_release_info_url())
-            self.set_action_text("Error!")
-            self.grid_progress_widgets()
+        self.set_action_text("Starting...")
+        self.append_text("Copying to %s\n" % target_path)
 
-    def update_ui(self):
-        if self._state == "idle":
-            self._possible_targets = self.get_possible_targets()
-            if not self._possible_targets:
-                set_text_if_different(self.target_label, "")
-                set_text_if_different(self.model_label, "")
-            else:
-                unpacked = list(zip(*self._possible_targets))
-                set_text_if_different(self.target_label, "\n".join(unpacked[0]))
-                model_changed = set_text_if_different(self.model_label, "\n".join(unpacked[2]))
+        ports_before = list_serial_ports_with_hw_info()
+        logger.debug("Ports before: %s", ports_before)
 
-            desc = self.get_firmware_description()
-            if desc is None:
-                set_text_if_different(self._version_label, self.get_unknown_version_text())
-            else:
-                set_text_if_different(self._version_label, desc)
+        with open(source_path, "rb") as fsrc:
+            bytes_copied = 0
+            self.append_text("Writing to %s\n" % target_path)
+            self.append_text("Starting...")
 
-        super(Uf2FlashingDialog, self).update_ui()
+            block_size = 8 * 1024
+            with open(target_path, "wb") as fdst:
+                while True:
+                    block = fsrc.read(block_size)
+                    if not block:
+                        break
 
-    def get_unknown_version_text(self):
-        return tr("Please wait") + "..."
+                    if self._state == "cancelling":
+                        raise UserError("Cancelling copying per user request")
 
-    def model_changed(self):
-        pass
-
-    def get_firmware_description(self):
-        if self._release_info is None:
-            return None
-        else:
-            return (
-                self._release_info["tag_name"]
-                + " ("
-                + self._release_info["published_at"][:10]
-                + ")"
-            )
-
-    def get_download_url_and_size(self, board_id):
-        if self._release_info is None:
-            return None
-
-        candidates = [
-            asset
-            for asset in self._release_info["assets"]
-            if self._is_suitable_asset(asset, board_id)
-        ]
-
-        logger.info(
-            "Assets from %s: %r", self._get_release_info_url(), self._release_info["assets"]
-        )
-        if len(candidates) == 0:
-            raise RuntimeError(
-                "Could not find the right file from the release info (%s)"
-                % self._get_release_info_url()
-            )
-        elif len(candidates) > 1:
-            raise RuntimeError(
-                "Found several possible files from the release info (%s)"
-                % self._get_release_info_url()
-            )
-        else:
-            return (candidates[0]["browser_download_url"], candidates[0]["size"])
-
-    def _is_suitable_asset(self, asset, model_id):
-        raise NotImplementedError()
-
-    def is_ready_for_work(self):
-        # Called after update_ui
-        return self._possible_targets and self._release_info
-
-    @classmethod
-    def get_possible_targets(cls):
-        all_vol_infos = [
-            (vol, cls.find_device_board_id_and_model(vol))
-            for vol in list_volumes(skip_letters=["A"])
-        ]
-
-        return [(info[0], info[1][0], info[1][1]) for info in all_vol_infos if info[1] is not None]
-
-    def start_work(self):
-        if len(self._possible_targets) > 1:
-            # size 0 is checked elsewhere
-            messagebox.showerror(
-                "Can't proceed",
-                "You seem to have plugged in %d compatible devices.\n"
-                + "Please leave only one and unplug the others!",
-                parent=self,
-            )
-            return False
-
-        target_dir, board_id, _ = self._possible_targets[0]
-
-        try:
-            download_url, size = self.get_download_url_and_size(board_id)
-        except Exception as e:
-            logger.error("Could not determine download url", exc_info=e)
-            messagebox.showerror("Could not determine download url", str(e), parent=self)
-            return False
-
-        self.report_progress(0, size)
-        proxy = get_runner().get_backend_proxy()
-        if isinstance(proxy, BareMetalMicroPythonProxy):
-            proxy.disconnect()
-
-        threading.Thread(
-            target=self._perform_work, args=[download_url, size, target_dir], daemon=True
-        ).start()
-        return True
-
-    @classmethod
-    def find_device_board_id_and_model(cls, mount_path):
-        info_path = os.path.join(mount_path, "INFO_UF2.TXT")
-        if not os.path.isfile(info_path):
-            return None
-
-        board_id = None
-        model = None
-        with open(info_path, "r", encoding="UTF-8", errors="replace") as fp:
-            for line in fp:
-                parts = list(map(str.strip, line.split(":", maxsplit=1)))
-                if len(parts) == 2:
-                    if parts[0] == "Model":
-                        model = parts[1]
-                    elif parts[0] == "Board-ID":
-                        board_id = parts[1]
-                        if not cls._is_relevant_board_id(board_id):
-                            return None
-
-                    if board_id and model:
-                        return board_id, model
-
-        return None
-
-    @classmethod
-    def _is_relevant_board_id(cls, board_id):
-        return True
-
-    def _get_vid_pids_to_wait_for(self):
-        """If result is non-empty then the process completes until a device with one of the vid-pid pairs appears"""
-        return set()
-
-    def _perform_work(self, download_url, size, target_dir):
-        try:
-            self._download_to_the_device(download_url, size, target_dir)
-            if self._state == "working" and self._get_vid_pids_to_wait_for():
-                self._wait_for_vid_pids()
-        except Exception as e:
-            self.append_text("\n" + "".join(traceback.format_exc()))
-            self.set_action_text("Error...")
-            self.report_done(False)
-            return
+                    fdst.write(block)
+                    bytes_copied += len(block)
+                    fdst.flush()
+                    try:
+                        # May fail after last block
+                        os.fsync(fdst.fileno())
+                    except Exception:
+                        if bytes_copied == size:
+                            logger.warning("Could not fsync last block")
+                        else:
+                            logger.exception("Could not fsync")
+                    percent_copied = bytes_copied / size * 100
+                    percent_str = "%.0f%%" % (percent_copied)
+                    self.set_action_text("Copying... " + percent_str)
+                    # use the right half of the progress bar for copying
+                    self.report_progress(percent_copied + 100, 200)
+                    self.replace_last_line(percent_str)
 
         if self._state == "working":
-            self.append_text("\nDone!\n")
-            self.set_action_text("Done!")
-            self.report_done(True)
-        else:
-            assert self._state == "cancelling"
-            self.append_text("\nCancelled\n")
-            self.set_action_text("Cancelled")
-            self.report_done(False)
+            self.perform_post_installation_steps(ports_before)
 
-    def _wait_for_vid_pids(self):
-        target_set = set(self._get_vid_pids_to_wait_for())
-        if not target_set:
-            return
+        return True
 
+    def _wait_for_new_ports(self, old_ports):
         self.append_text("\nWaiting for the port...\n")
         self.set_action_text("Waiting for the port...")
 
         wait_time = 0
         step = 0.2
         while wait_time < 10:
-            for p in list_serial_ports():
-                vidpid = (p.vid, p.pid)
-                if vidpid in target_set or (p.vid, None) in target_set:
-                    self.append_text("Found %s at %s\n" % ("%04x:%04x" % vidpid, p.device))
+            new_ports = list_serial_ports_with_hw_info()
+            added_ports = set(new_ports) - set(old_ports)
+            if added_ports:
+                for port_tuple in added_ports:
+                    self.append_text("Found port %s (%s)\n" % port_tuple)
                     self.set_action_text("Found port")
-                    return
+
+                if len(added_ports) == 1:
+                    self.new_port, _ = added_ports.pop()
+
+                return
             if self._state == "cancelling":
                 return
             time.sleep(step)
             wait_time += step
         else:
+            logger.debug("Ports after: %s", list_serial_ports_with_hw_info())
             self.set_action_text("Warning: Could not find port")
             self.append_text("Warning: Could not find port in %s seconds\n" % int(wait_time))
             # leave some time to see the warning
             time.sleep(2)
 
-    def _download_to_the_device(self, download_url, size, target_dir):
-        """Running in a bg thread"""
-        target_path = os.path.join(target_dir, self.get_target_filename())
-        logger.debug("Downloading %d bytes from %s to %s", size, download_url, target_path)
+    def perform_post_installation_steps(self, ports_before):
+        self._wait_for_new_ports(ports_before)
 
-        self.set_action_text("Starting...")
-        self.append_text("Downloading %d bytes from %s\n" % (size, download_url))
 
-        req = urllib.request.Request(
-            download_url,
-            data=None,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/35.0.1916.47 Safari/537.36"
-            },
-        )
+def find_uf2_property(lines: List[str], prop_name: str) -> Optional[str]:
+    marker = prop_name + ": "
+    for line in lines:
+        if line.startswith(marker):
+            return line[len(marker) :]
 
-        with urlopen(req, timeout=5) as fsrc:
-            bytes_copied = 0
-            self.append_text("Writing to %s\n" % target_path)
-            self.append_text("Starting...")
-            if fsrc.length:
-                # override (possibly inaccurate) size
-                size = fsrc.length
+    return None
 
-            block_size = 8 * 1024
-            with open(target_path, "wb") as fdst:
-                while True:
 
-                    block = fsrc.read(block_size)
-                    if not block:
-                        break
+def show_uf2_installer(master, firmware_name: str) -> Optional[str]:
+    dlg = Uf2FlashingDialog(master, firmware_name=firmware_name)
+    from thonny import ui_utils
 
-                    if self._state == "cancelling":
-                        break
+    ui_utils.show_dialog(dlg)
+    return dlg.new_port
 
-                    fdst.write(block)
-                    fdst.flush()
-                    os.fsync(fdst.fileno())
-                    bytes_copied += len(block)
-                    percent_str = "%.0f%%" % (bytes_copied / size * 100)
-                    self.set_action_text("Copying... " + percent_str)
-                    self.report_progress(bytes_copied, size)
-                    self.replace_last_line(percent_str)
 
-    def get_target_filename(self):
-        return "firmware"
+def uf2_device_is_present_in_bootloader_mode() -> bool:
+    for vol in list_volumes(skip_letters=["A"]):
+        info_path = os.path.join(vol, "INFO_UF2.TXT")
+        if os.path.isfile(info_path):
+            return True
 
-    def get_title(self):
-        return "Install MicroPython firmware"
+    return False
+
+
+def _extract_normalized_words(text: str) -> Set[str]:
+    return set(text.replace("_", " ").replace("-", "").lower().split())
+
+
+def create_volume_description(path: str) -> str:
+    if sys.platform == "win32":
+        try:
+            label = get_win_volume_name(path)
+            disk = path.strip("\\")
+            return f"{label} ({disk})"
+        except Exception:
+            logger.error("Could not query volume name for %r", path)
+            return path
+    else:
+        return path
+
+
+def list_serial_ports_with_hw_info():
+    return [(p.device, p.hwid) for p in list_serial_ports(max_cache_age=0)]

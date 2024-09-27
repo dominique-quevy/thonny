@@ -3,18 +3,18 @@ NB! Stippling doesn't work on mac:
 http://wiki.tcl.tk/44444
 http://rkeene.org/projects/tcl/tk.fossil/tkthistory/2954673
 """
-import logging
+
 import os.path
+from logging import getLogger
 from tkinter import font
 
 import thonny
-from thonny import get_workbench, jedi_utils
+from thonny import get_workbench
 from thonny.codeview import get_syntax_options_for_tag
 
 
 def create_bitmap_file(width, height, predicate, name):
-
-    cache_dir = os.path.join(thonny.THONNY_USER_DIR, "image_cache")
+    cache_dir = os.path.join(thonny.get_thonny_user_dir(), "image_cache")
     name = "%s_%d_%d.xbm" % (name, width, height)
     filename = os.path.join(cache_dir, name)
 
@@ -147,7 +147,7 @@ def clear_tags(text):
 def add_tags(text):
     source = text.get("1.0", "end")
     clear_tags(text)
-    tree = jedi_utils.parse_source(source)
+    # tree = jedi_ utils.parse_source(source)
 
     print_tree(tree)
     last_line = 0
@@ -158,7 +158,6 @@ def add_tags(text):
         from parso.python import tree as python_tree
 
         if node.type == "simple_stmt" or isinstance(node, (python_tree.Flow, python_tree.Scope)):
-
             start_line, start_col = node.start_pos
             end_line, end_col = node.end_pos
 
@@ -180,7 +179,6 @@ def add_tags(text):
             # exceptions: several statements on the same line (semicoloned statements)
             # also unclosed parens in if-header
             for lineno in range(start_line, end_line if end_col == 0 else end_line + 1):
-
                 top = lineno == start_line and lineno > 1
                 bottom = False  # start_line == end_line-1
 
@@ -246,7 +244,7 @@ def configure_and_add_tags(text):
                 text.after(500, lambda: configure_and_add_tags(text))
                 return
         except Exception:
-            logging.exception("Problem with defining structure tags")
+            logger.exception("Problem with defining structure tags")
             return
 
     add_tags(text)
@@ -258,4 +256,4 @@ def _load_plugin() -> None:
     wb.set_default("view.program_structure", False)
     wb.bind("Save", handle_editor_event, True)
     wb.bind("Open", handle_editor_event, True)
-    wb.bind_class("CodeViewText", "<<TextChange>>", handle_events, True)
+    wb.bind_class("EditorCodeViewText", "<<TextChange>>", handle_events, True)

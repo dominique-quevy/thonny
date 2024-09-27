@@ -1,12 +1,21 @@
-jedi==0.18.*
+jedi==0.19.*
 pyserial==3.5
-pylint==2.8.*
-docutils==0.17.*
-mypy==0.902.*
-asttokens==2.0.*
-Send2Trash==1.7.*
-esptool==3.1.*
-paramiko==2.7.*
-ptyprocess==0.7.*
-websockets==9.1.*
+pylint==3.2.*
+docutils==0.21.*
+mypy==1.11.*
+asttokens==2.4.*
+Send2Trash==1.8.*
+packaging==24.*
 
+# esptool's and paramiko's dependencies (cryptography) are difficult to build on ARM64 Windows. Skipping paramiko for now.
+esptool==4.7.*; platform_machine != 'ARM64' or sys_platform != 'win32'
+bcrypt==4.1.*; platform_machine != 'ARM64' or sys_platform != 'win32'
+cryptography==38.*; platform_machine != 'ARM64' or sys_platform != 'win32'  # 38 is good fit for macoOS, see also ~/thonny_alt_packages
+paramiko==3.4.*; platform_machine != 'ARM64' or sys_platform != 'win32'
+
+websockets==13.0.*
+ptyprocess==0.7.*; sys_platform == "linux" or sys_platform == "darwin"
+dbus-next==0.2.*; sys_platform == "linux"
+
+grpcio==1.65.5
+protobuf==5.27.3

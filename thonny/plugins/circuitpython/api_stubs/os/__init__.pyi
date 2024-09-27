@@ -1,44 +1,77 @@
 """functions that an OS normally provides
 
-The `os` module is a strict subset of the CPython `cpython:os` module. So,
-code written in CircuitPython will work in CPython but not necessarily the
-other way around."""
+|see_cpython_module| :mod:`cpython:os`.
+"""
 
-def uname() -> Any:
+from __future__ import annotations
+
+import typing
+from typing import Optional, Tuple
+
+def uname() -> _Uname:
     """Returns a named tuple of operating specific and CircuitPython port
     specific information."""
     ...
 
-def chdir(path: Any) -> Any:
+class _Uname(typing.NamedTuple):
+    """The type of values that :py:func:`.uname()` returns"""
+
+    sysname: str
+    nodename: str
+    release: str
+    version: str
+    machine: str
+
+def chdir(path: str) -> None:
     """Change current directory."""
     ...
 
-def getcwd() -> Any:
+def getcwd() -> str:
     """Get the current directory."""
     ...
 
-def listdir(dir: Any) -> Any:
+def getenv(key: str, default: Optional[str] = None) -> Optional[str]:
+    """Get the environment variable value for the given key or return ``default``.
+
+    This may load values from disk so cache the result instead of calling this often."""
+    ...
+
+def listdir(dir: str) -> str:
     """With no argument, list the current directory.  Otherwise list the given directory."""
     ...
 
-def mkdir(path: Any) -> Any:
+def mkdir(path: str) -> None:
     """Create a new directory."""
     ...
 
-def remove(path: Any) -> Any:
+def remove(path: str) -> None:
     """Remove a file."""
     ...
 
-def rmdir(path: Any) -> Any:
+def rmdir(path: str) -> None:
     """Remove a directory."""
     ...
 
-def rename(old_path: Any, new_path: Any) -> Any:
+def rename(old_path: str, new_path: str) -> str:
     """Rename a file."""
     ...
 
-def stat(path: Any) -> Any:
+def stat(path: str) -> Tuple[int, int, int, int, int, int, int, int, int, int]:
     """Get the status of a file or directory.
+
+       Returns a tuple with the status of a file or directory in the following order:
+
+
+       * ``st_mode`` -- File type, regular or directory
+       * ``st_ino``  -- Set to 0
+       * ``st_dev`` -- Set to 0
+       * ``st_nlink`` -- Set to 0
+       * ``st_uid`` -- Set to 0
+       * ``st_gid`` -- Set to 0
+       * ``st_size`` -- Size of the file in bytes
+       * ``st_atime`` -- Time of most recent access expressed in seconds
+       * ``st_mtime`` -- Time of most recent content modification expressed in seconds.
+       * ``st_ctime`` -- Time of most recent content modification expressed in seconds.
 
     .. note:: On builds without long integers, the number of seconds
        for contemporary dates will not fit in a small integer.
@@ -46,7 +79,7 @@ def stat(path: Any) -> Any:
        which is the number of seconds corresponding to 1999-12-31."""
     ...
 
-def statvfs(path: Any) -> Any:
+def statvfs(path: str) -> Tuple[int, int, int, int, int, int, int, int, int, int]:
     """Get the status of a filesystem.
 
     Returns a tuple with the filesystem information in the following order:
@@ -67,16 +100,21 @@ def statvfs(path: Any) -> Any:
     in a port-specific implementation."""
     ...
 
-def sync() -> Any:
+def sync() -> None:
     """Sync all filesystems."""
     ...
 
-def urandom(size: Any) -> Any:
+def urandom(size: int) -> str:
     """Returns a string of *size* random bytes based on a hardware True Random
-    Number Generator. When not available, it will raise a NotImplementedError."""
+    Number Generator. When not available, it will raise a NotImplementedError.
+
+    **Limitations:** Not yet available on nRF. Not available on SAMD21 due to lack of hardware.
+    """
     ...
 
-""".. data:: sep
+def utime(path: str, times: Tuple[int, int]) -> None:
+    """Change the timestamp of a file."""
+    ...
 
-  Separator used to delineate path components such as folder and file names."""
-
+sep: str
+"""Separator used to delineate path components such as folder and file names."""

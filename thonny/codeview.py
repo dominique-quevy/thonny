@@ -4,14 +4,17 @@ import io
 import os
 import re
 import sys
+import time
 import tkinter as tk
+from logging import getLogger
 from tkinter import messagebox
 from typing import Dict, Union  # @UnusedImport
 
 from thonny import get_workbench, roughparse, tktextext, ui_utils
 from thonny.common import TextRange
+from thonny.languages import tr
 from thonny.tktextext import EnhancedText
-from thonny.ui_utils import EnhancedTextWithLogging, scrollbar_style, ask_string
+from thonny.ui_utils import EnhancedTextWithLogging, ask_string, compute_tab_stops
 
 _syntax_options = {}  # type: Dict[str, Union[str, int]]
 # BREAKPOINT_SYMBOL = "•" # Bullet
@@ -28,12 +31,16 @@ NON_TEXT_CHARS.remove("\n")
 NON_TEXT_CHARS.remove("\r")
 NON_TEXT_CHARS.remove("\f")
 
+logger = getLogger(__name__)
+
 
 class SyntaxText(EnhancedText):
-    def __init__(self, master=None, cnf={}, **kw):
+    def __init__(self, master, indent_width: int = 4, tab_width: int = 4, cnf={}, **kw):
         self.file_type = "python"
         self._syntax_options = {}
-        super().__init__(master=master, cnf=cnf, **kw)
+        super().__init__(
+            master=master, indent_width=indent_width, tab_width=tab_width, cnf=cnf, **kw
+        )
         get_workbench().bind("SyntaxThemeChanged", self._reload_syntax_options, True)
         self._reload_syntax_options()
 
@@ -103,20 +110,22 @@ class SyntaxText(EnhancedText):
     def is_pythonlike_text(self):
         return self.file_type == "pythonlike"
 
-    def update_tabs(self):
-        tab_chars = 4
-        tab_pixels = tk.font.nametofont(self["font"]).measure("n" * tab_chars)
-        tabs = [tab_pixels]
-        self.configure(tabs=tabs, tabstyle="wordprocessor")
+    def update_tab_stops(self):
+        tab_chars = get_workbench().get_option("edit.tab_width")
+        font = tk.font.nametofont(self["font"])
+        self.configure(tabs=tuple(compute_tab_stops(tab_chars, font)), tabstyle="wordprocessor")
 
 
 class CodeViewText(EnhancedTextWithLogging, SyntaxText):
     """Provides opportunities for monkey-patching by plugins"""
 
     def __init__(self, master=None, cnf={}, **kw):
-
+        indent_width = get_workbench().get_option("edit.indent_width")
+        tab_width = get_workbench().get_option("edit.tab_width")
         super().__init__(
             master=master,
+            indent_width=indent_width,
+            tab_width=tab_width,
             tag_current_line=get_workbench().get_option("view.highlight_current_line"),
             cnf=cnf,
             **kw,
@@ -144,15 +153,16 @@ class CodeViewText(EnhancedTextWithLogging, SyntaxText):
 
 class CodeView(tktextext.EnhancedTextFrame):
     def __init__(self, master, propose_remove_line_numbers=False, **text_frame_args):
+        frame_args = text_frame_args.copy()
+        if "text_class" not in frame_args:
+            frame_args["text_class"] = CodeViewText
+
         super().__init__(
             master,
-            text_class=CodeViewText,
             undo=True,
             wrap=tk.NONE,
-            vertical_scrollbar_style=scrollbar_style("Vertical"),
-            horizontal_scrollbar_style=scrollbar_style("Horizontal"),
             horizontal_scrollbar_class=ui_utils.AutoScrollbar,
-            **text_frame_args,
+            **frame_args,
         )
 
         # TODO: propose_remove_line_numbers on paste??
@@ -162,7 +172,10 @@ class CodeView(tktextext.EnhancedTextFrame):
         get_workbench().bind("SyntaxThemeChanged", self._reload_theme_options, True)
         self._original_newlines = os.linesep
         self._reload_theme_options()
-        self._gutter.bind("<Double-Button-1>", self._toggle_breakpoint, True)
+        self._start_toggle_breakpoint_index = None
+        self._last_toggle_breakpoint_time = 0
+        self._gutter.bind("<Button-1>", self._start_toggle_breakpoint, True)
+        self._gutter.bind("<ButtonRelease-1>", self._consider_toggle_breakpoint, True)
         # self.text.tag_configure("breakpoint_line", background="pink")
         self._gutter.tag_configure("breakpoint", foreground="crimson")
 
@@ -195,7 +208,7 @@ class CodeView(tktextext.EnhancedTextFrame):
             return encoding
         else:
             ENCODING_MARKER = re.compile(
-                br"(charset|coding)[\t ]*[=: ][\t ]*[\"\']?([a-z][0-9a-z-_ ]*[0-9a-z])[\"\'\n\r\t ]?",
+                rb"(charset|coding)[\t ]*[=: ][\t ]*[\"\']?([a-z][0-9a-z-_ ]*[0-9a-z])[\"\'\n\r\t ]?",
                 re.IGNORECASE,
             )
 
@@ -223,8 +236,8 @@ class CodeView(tktextext.EnhancedTextFrame):
         return content.encode(self.detect_encoding(content.encode("ascii", errors="replace")))
 
     def set_content_as_bytes(self, data, keep_undo=False):
-
         encoding = self.detect_encoding(data)
+        logger.debug("Detected encoding %s", encoding)
         while True:
             try:
                 chars = data.decode(encoding)
@@ -235,8 +248,8 @@ class CodeView(tktextext.EnhancedTextFrame):
                 pass
 
             encoding = ask_string(
-                "Bad encoding",
-                "Could not read as %s text.\nYou could try another encoding" % encoding,
+                tr("Bad encoding"),
+                tr("Could not read as %s text.\nYou could try another encoding") % encoding,
                 initial_value=encoding,
                 options=get_proposed_encodings(),
                 master=self.winfo_toplevel(),
@@ -267,8 +280,19 @@ class CodeView(tktextext.EnhancedTextFrame):
         if not keep_undo:
             self.text.edit_reset()
 
-    def _toggle_breakpoint(self, event):
+    def _start_toggle_breakpoint(self, event):
+        self._start_toggle_breakpoint_index = "@%d,%d" % (event.x, event.y)
+
+    def _consider_toggle_breakpoint(self, event):
+        if time.time() - self._last_toggle_breakpoint_time < 0.3:
+            # it was probably a double-click. Don't want to double-toggle in this case.
+            return
+
         index = "@%d,%d" % (event.x, event.y)
+        if index != self._start_toggle_breakpoint_index:
+            # it was probably a drag
+            return
+
         start_index = index + " linestart"
         end_index = index + " lineend"
 
@@ -280,6 +304,7 @@ class CodeView(tktextext.EnhancedTextFrame):
                 self.text.tag_add("breakpoint_line", start_index, end_index)
 
         self.update_gutter(clean=True)
+        self._last_toggle_breakpoint_time = time.time()
 
     def _clean_selection(self):
         self.text.tag_remove("sel", "1.0", "end")
@@ -454,7 +479,7 @@ def perform_python_return(text: EnhancedText, event):
         # adjust indentation for continuations and block
         # open/close first need to find the last stmt
         lno = tktextext.index2line(text.index("insert"))
-        y = roughparse.RoughParser(text.indent_width, text.tabwidth)
+        y = roughparse.RoughParser(text.indent_width, text.tab_width)
 
         for context in roughparse.NUM_CONTEXT_LINES:
             startat = max(lno - context, 1)

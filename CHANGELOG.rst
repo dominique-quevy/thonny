@@ -2,6 +2,345 @@
 Version history
 ===============
 
+5.0.0b1 (2024-06-??)
+====================
+Breaking changes
+----------------
+* Minimal supported Python version is now 3.9
+* Drop support for Windows 7 and 8.
+* Stop publishing binaries for Linux, #3210. The Linux installation script now creates a private venv (based on system python3) for Thonny even in x84_64.
+* Stop publishing XXL bundle as it is not trivial to prepare bundles for all popular architectures while making sure there are no version conflicts between the large number of packages. For teachers who relied on the XXL bundle, the work-around is to prepare a suitable requirements.txt, which can be used as input in Thonny's package manager.
+
+4.1.6 (2024-09-11)
+==================
+* Make macOS installer work in Sequoia
+* Add more entitlements for macOS app bundle (may fix problems with programs using camera or microphone)
+* New and updated languages thanks to the translators at POEditor
+
+4.1.5 (2024-09-10)
+==================
+* Fix handling nulls in PyPI metadata (fixes installing some PyPI packages)
+* Work around dialogs getting stuck after minimizing windows, #3068
+* Fix too eager instrumentation of MicroPython code, #3043
+* Fix installing package from local file
+
+4.1.4 (2023-11-19)
+==================
+* Fix regression in MicroPython package installation, #2979
+* Add better error message for externally managed environments, #3009
+* Fix package installation in remote virtual environments
+* Update Raspberry Pi detection
+* Silence "bad-option-value"-s given by Pylint 3
+
+4.1.3 (2023-09-28)
+==================
+* Fix first run crash on macOS (#2860)
+* Fix package upgrade and uninstall in portable variant (#2902)
+* Fix esptool flasher proposing wrong starting address for ESP32-S2 devices, #2920
+* Fix cursor jumping to Shell when program waits for input and the user types opening parenthesis in the editor, #2834
+* Add Catalan translation (by Pere)
+* Update German, French, Portuguese and Romanian translations. (See POEditor for contributions)
+
+4.1.2 (2023-08-12)
+==================
+* Avoid repetitive attempts to restart backend after connection gets lost during a Run (#2836)
+* Automatically hide tooltips if window loses focus, #2607
+* Import optional deps with augmented sys.path, fixes problems with importing plug-ins (#2816)
+* Don't leak main site-packages to virtual environment's sys.path, #2867
+* Fix Assistant error with relative imports, #2873
+* Don't attempt to save unchanged editor at run, #2804
+* Fix MicroPython upload errors by more conservative back-end isolation, #2016, #2851, #2864
+* Fix MicroPython code completions by fixing packaging of base MicroPython stubs, #2895
+* Fix various completion failures by reverting a jedi hack (67f2c120)
+* Avoid duplicate MicroPython completions when a module is already imported (852308fd)
+* Update Persian, Italian, Japanese, Brazilian Portuguese and Chinese translations (see POEditor for contributions)
+
+4.1.1 (2023-06-11)
+==================
+* Fix warning for the cases where Thonny avoids user module shadowing a library module (#384)
+* Fix installing from local file in ESP flashing dialog (#2811)
+* Use a tilde to separate pre-release versions in the AppData (#2807), by @jwillikers
+* Use bigger initial width in simple mode
+* Big progress with Italian translation, by mapi68, Ribezzz and sailslack
+* Updated Chinese (TW) and English (UK) translations
+
+
+4.1.0 (2023-06-03)
+==================
+* Fix MicroPython config page regression introduced in 4.1.0b1 (#2724, #2763)
+* Fix remote Python 3 (SSH) connection error (regression introduced in 4.1.0b1)
+* Fix code completion shortcut displayed in macOS menu
+* Add command "Show esptool version" for ESP flasher
+* Don't disconnect for ESP flasher commands which don't touch the device
+* Close tab on middle click (#2767) by @mrexodia
+* Make package manager support new micropython-lib index (#2777)
+* Report macOS version instead of Darwin version in the About box
+* Implement more flexible Raspberry Pi detection
+* Enable thonny to open and save files with zenity 3.91+ (#2786) by @befeleme
+* Make dbus_next dependency optional (#2771)
+* Recognize ESP32 as possible CircuitPython device
+* Add menu indicator for back-end switcher
+* Allow WebREPL for RP2040 backend (experimental)
+* Use correct MicroPython start address (0x0 instead of 0x1000) when flashing ESP32-S3
+* Recognize ESP32 devices by VID 0x303A
+* Don't show irrelevant ports in port selector (e.g. /dev/cu.Bluetooth-Incoming-Port)
+* Allow setting --flash-size in ESP flasher, #2801
+* Rename "Raspberry Pi" initial settings to "Raspberry Pi (simple)"
+* Update several translations
+* Add en_GB translation
+* Attempt to overcome "window was deleted before its visibility changed" error
+* Fix pipkin directory creation in paste mode (e.g. package installation via WebREPL)
+* Upgrade bundled websockets, paramiko, docutils, mypy, Send2Trash, esptool to latest versions
+
+
+4.1.0b1 (2023-04-23)
+====================
+
+New
+---
+* Enhance esptool GUI (propose known MicroPython and CircuitPython downloads; allow setting baud rate and start address; allow querying device info), #2707, #1600, #2536, #1171, #2657
+* Ensure Thonny's backends don't get confused by other installations, #2616
+* Detect and warn if user module is shadowing a library module, #384
+* Make serial port description in interpreter selection menu more descriptive
+* Added pt_BR translation for all help pages, #2673, by @mgmalheiros
+* Add Pololu MicroPython downloads to UF2 flasher
+* Use UDisks to find mounted filesystems on Linux, #2683 by jwillikers
+
+Dependency changes
+------------------
+* Upgrade bundled Python from 3.10.9 to 3.10.11
+* Upgrade bundled Tk from 8.6.12 to 8.6.13
+* Upgrade bundled Pylint from 2.15 to 2.17
+* Upgrade bundled MyPy from 0.991 to 1.2
+
+Fixes
+-----
+* Fix a potential autocompletion error, #2162
+* Experiment with better MicroPython raw paste fallback, #2624
+* Fix sys.sdtout.write return value, #2629
+* Remove unnecessary shebangs, #2645
+* Add option for saving unnamed editors before Run/Debug, #2619
+* Fix blank editors in macOS, again, #2425
+* Fix todo view, #2681, by @kr-g
+* Minor corrections for English help pages, #2674, by @mgmalheiros
+* Upgrade bundled esptool from 4.4 to 4.5
+* Allow Linux installer to use existing Python 3.11 and 3.12, #2676
+* Require saving before using fast debugger, #2699, by @michaellass
+* Add missing translation sites in editors.py, #2705 by @nicolasdespres
+* Restore MicroPython completions in the shell, #2467, #2419
+* Don't use deprecated FLASK_ENV environment variable.
+* Add better shortcut for increasing font size in macOS, #2725
+* Avoid falling back to Python menu in simple mode on macOS, #2729
+* Various improvements to "Kind of Aqua" UI theme, #2760
+* Fix double paste with Command-V when CapsLock on, #2753
+* Fix Cut with Command-X when CapsLock on, #2753
+
+
+4.0.2 (2023-01-14)
+==================
+* Fix Mypy logging error in the Assistant, #2491 by @kr-g and @solsword
+* Fix AttributeError on save, #2454
+* Add Thonny version as environment value for user programs, #2494 by @kr-g
+* Make `__file__` contain absolute path, #2497
+* Start SSH preparation command with space to avoid adding it to shell history, #2563 by @isaacl
+* Bump pipkin version to 1.0b8 and fix various bugs with MicroPython package installation, including not being able to update a package (#2555)
+* Restore Find/Replace dialog close button and non-dialog behavior, #2461, #2550
+* Make Find/Replace dialog non-modal again, #2550
+* Fix Find/Replace seeding, #2356, #2550
+* Restore focus after using file dialogs, #2501
+* Don't remove stacktrace links after closing the process, #2471
+* Never clear shell when Stop/Restart is used for stopping a process, #2456
+* Treat .toml, .gitignore and .env as text files
+* Fix expression box glitch (lower frame box remaining visible) when debugging on macOS
+* Ignore disk flushing errors in the end of UF2 installation
+* Make port finding in the end of UF2 installation process more robust
+* Don't enable variant and version selection in UF2 dialog before variants get downloaded
+* Add Vietnamese translation, by Bui Huy Quang
+* Update several translations
+* Fix the name for Slowenian, #2611
+* Update several deps in Thonny + Python bundles (asttokens, mypy, pylint, esptool, paramiko)
+
+4.0.1 (2022-09-11)
+==================
+* Fix error when running script with closed Shell, #2412
+* Fix error with programs calling `exit` (more robust handing of closing the back-end process), #1786, #2433, #2423
+* Fix blank editor after switching tabs on macOS, #2425
+* Instruct saving the program before debugging, #2415
+* Fix find not highlighting selected result in block comments, #2407
+* Fix new file creation error, #2406
+* Fix Choice Dialog closing with ESC, #2406
+* Fix the error when invoking Python's `help` function, #2435
+* Fall back to killing current process when running and interrupt doesn't work, #2420
+* Don't close the backend process when interrupting at idle prompt, #2422
+* Fix Windows 11 version in About dialog, #2406
+* Fix outdated test, #2413
+* Make the Mac installer more compatible with Arm, #2409
+* Allow downloading latest unstable MicroPython builds, #2408
+* Allow new file command for remote file browser
+* Update Estonian, German and Chinese (TW) translations
+
+
+4.0.0 (2022-08-22)
+==================
+* Fix error when pressing Ctrl-D with unsubmitted input, #2388
+* Fix the error when clicking info line in TODO view (by @kr-g), #2389
+* Show previous location when re-loading externally modified file, #1589, #1455, #1968
+* Don't propose completions automatically in comments, #2393
+* Fix a_box_is_appearing completion error, #2256
+* INTERNAL: Simplify jedi_utils, drop support for versions below 0.18.1
+* Upgrade deps in XXL bundle
+* Fix "Seed find/replace with currently-selected text" for Linux, #2356
+* Update German translations (by the contributors in POEditor)
+
+4.0.0b4 (2022-08-14)
+====================
+* CHANGED: Require single click for toggling a breakpoint, #2293
+* Refactor MicroPython/CircuitPython flashing dialog, #2344
+* Add TODO view (by @kr-g), #2067
+* Add possibility to activate a virtual environment via Files view (by @kr-g), #2381
+* Add separate "Install ..." items to the back-end switcher menu if a device in UF2 bootloader mode is detected, #2387
+* Automatically reload saved files after external modification (with help from @kr-g), #1589, #1455, #1968
+* Add EV3 default password information to config page, #2284
+* Don't choke on relative interpreter paths, #2335
+* Don't crash when Windows network locations can't be found, #2285
+* Don't show package extra deps even when the extra is combined with another condition
+* Make paddings larger for hi-res displays
+* Take OSC commands into account when looking for prompts (relevant for CircuitPython 8), #2349
+* Support OSC sequences for setting terminal title, #2369
+* Toggle hidden files also via file-browser's context menu, #1039
+* Use "Install MicroPython" instead of "Install firmware", #2364
+* Rename "Python 3" back-end to "Local Python 3"
+* Seed find/replace with currently-selected text, #2356
+* Work around Pylint error (make Pylint work again), #2359
+* Add coloring for `match` and `case` soft keywords, #2358
+* Add Slovenian translation (by cspaier)
+* Update several translations
+* Fix translations with bad placeholders (by @abrarwali), #2253
+
+4.0.0b3 (2022-05-15)
+====================
+
+* BREAKING: Don't SetProcessDpiAwareness for user programs anymore. This means for example, that Tkinter and Pygame programs on Windows run as if they were executed with plain Python (ie they may become blurry on modern displays). For clear picture, start your program with ``import ctypes; ctypes.OleDLL("shcore").SetProcessDpiAwareness(1)``, #2159
+* Add "Assistant" help page explaining the possibility to omit selected Pylint checks, #1978
+* Add command "Run => Visualize current script at Python Tutor", #2242
+* Fix debugger error when importing user modules (regression introduced in 4.0.0b1), #2246
+* Add options for automatically making uploaded or saved shebang scripts executable (includes changing Windows line breaks to Unix ones). See "Editor" and SSH-backends' config pages.
+* Don't propose pythonw.exe as initial backend, #2236
+* Fix error when trying to open a file from file browser with ENTER, #1785
+* Fix support for remote Python 3 over SSH (regression introduced in one of the 4.0.0 betas), #2249
+* Support CircuitPython with micro:bit, #2251
+* Avoid wobbling of AutomaticScrollbar, helpful report by @TooLazy0x00, #2258
+* Fix problem uninstalling MicroPython packages
+* Install packages without --user in portable mode, #1606
+* Allow back-end plugins to modify sys.path, #2281
+* Use %run instead of %Run when skipping interpreter restart, #1565
+* Updated Estonian, Thai and Brazilian Portuguese translations
+* EXPERIMENTAL: Add LEGO® EV3 back-end: "Run => Select interpreter => MicroPython (EV3)"
+
+4.0.0b2 (2022-04-09)
+====================
+
+* Fix the problem with scripts having declared encoding something else than UTF-8, #1650
+* Don't clear shell after automatic restart
+* Fixes certain problems with running Flask and multiprocessing programs, #2062
+* Fix KeyError: 'ESP32.url' when connecting to WebREPL, #2082 (regression introduced in b1)
+* Fix parameter completions where name of local variable was proposed with trailing '='
+* Fix error with printing (regression introduced in b1), #2233
+* Fix Find & replace dialog not appearing, #2208
+* Fix display of debugger frames (regression introduced in 4.0.0b1), #2216
+* Warn when environment value is provided with quotes, #2184
+* Let macOS installer know the bundle is able to run in arm64 mode, #2201
+* Update completion stubs for MicroPython and CircuitPython (from @hlovatt and @adafruit)
+* Add compatibility with Python 3.8 via Windows launcher, #2206
+* Disable "Run" command when MicroPython device is disconnected
+* Make Shell read-only when device is disconnected
+* Fix various problems with managing files on CircuitPython devices
+* Don't assume all CircuitPython boards have RTC, #1760
+* Fix error with evaluating ``globals()`` on MicroPython device, #1938
+* Add MicrobitImage inspector for Object inspector
+* Add Tamil translation, by Kamala Kannan K and அனிச்பிரபு தி, #2211
+* Add Thai translation, by Tomzt Pimai and Game of
+* Update translations for German, Spanish, Japanese, Slovak, Korean, Brazilian Portuguese, Albanian
+
+
+4.0.0b1 (2022-03-21)
+====================
+New & changed
+--------------
+
+Distribution
+~~~~~~~~~~~~
+* Upgrade bundled Python to 3.10
+* Drop support for Python 3.5, 3.6 and 3.7
+* The main Windows bundle is now 64-bit. For fallback publish 32-bit bundle with Python 3.8 for 32-bit Windows 10 and 8.1 and all variants of Windows 7 and 8.
+* Mac bundle now comes with the universal2 build of Python
+* Stop publishing 32-bit Linux bundles.
+* Enhance Linux installer script (the .bash-file) to create a venv and pip-install Thonny if run on a platform for which there is no binary bundle available. This means you can now use Linux installer also on Raspberry Pi, #1736
+
+Code completion and analysis
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+* Add the option for automatically getting completions while typing (Tools => Options => Editor)
+* Selecting a completion with Tab now replaces the name suffix right of the cursor, #1998
+* Turn off requesting completions with Tab in editors by default, #2069
+* Show documentation for the selected completion with another Ctrl-Space or automatically (Tools => Options => Editor)
+* Add "call-tips" -- a box describing the formal parameters of current method call. Invoke manually with Ctrl-Shift-Space or automatically after typing open parentheses (Tools => Options => Editor)
+* Enhance Go-to-definition (Ctrl-click). The name is now underlined while ctrl-hovering over it.
+
+MicroPython
+~~~~~~~~~~~
+* Use [pipkin](https://pypi.org/project/pipkin/) for managing packages on MicroPython and CircuitPython devices. This enables proper listing of packages together with version info and proper uninstallation.
+* Use `.local_rtc` config parameters instead of (oppositely worded) `.utc_clock` in MicroPython back-ends, 116aecd714d5e94a8ad6e244deac44aece5065eb
+* Present MicroPython time options (whether to sync time and whether to use local time) in back-end configuration page, #1638
+* Automatically interrupt current process when connecting to bare-metal MicroPython or CircuitPython device. This can be turned off at device's settings page, #2059
+* Don't hide the output when Stop/Restarting MicroPython, #1805
+* Make internal MicroPython errors less intimidating. In several cases the errors are caused by bugs in MicroPython or USB driver and there is no use of showing the stacktrace. User is now directed to restart the device and stacktrace can be checked from the backend.log, #1799
+* Make MicroPython back-end advise Ctrl+C also if only whitespace characters get printed, #1755
+* Allow running MicroPython scripts without soft-rebooting first, #1565, #1716
+* Add generic "MicroPython (RP2040)" back-end in addition to the more specific "MicroPython (Raspberry Pi Pico)", #2151
+* Mention the possibility to reconfigure file types when denying opening remote files in a system app, #2148
+
+Various
+~~~~~~~
+* Add new toolbar button which opens the wiki page describing ways to help Ukraine survive the attack from Russia.
+* Allow running content of untitled editors without saving, #778
+* Clear Shell before starting new process (Run, Debug, Stop/Restart, ...) by default. Can be turned off in Tools => Options => Shell, #1681
+* Make stacktrace links to ``<stdin>`` and ``<input>`` pseudo-files go to the editor containing corresponding source, #778
+* Ask confirmation for adding .py extension when the user saves the file without any extension to MicroPython/CircuitPython device, #2077
+* Don't add the .py extension when the user saves a local file and selects "All files" filter.
+* Add Cut/Copy/Paste to the file browser, #2001 by @kr-g
+* Make editor remember current line when reloading external changes, #2001 by @kr-g
+* Add "Edit => Go to line..." command (Ctrl-G), #2001 by @kr-g
+* Add "Rename" command for the local file browser, #2001 by @kr-g
+* Add nicer Stop-button for higher resolutions, #1445 by @speedy-10
+* Improve icon scaling -- use larger icons when Treeview row height is larger than ``general.large_icon_rowheight_threshold``
+* Use default font in Treeviews (including Files and Variables view). Therefore Treeview's font size is now affected by the scaling factor and is not affected by editor font size.
+* Use isolated mode for launching Thonny. This includes hiding user-site packages from Thonny's GUI process (not from user programs). Plug-ins now get installed under Thonny's data folder, #2038, #1651
+* Allow installing packages for remote CPython backend, #1319
+* Flatten the list of interpreters in the backend-switcher menu (lower-right corner of the main window)
+* Removed previously deprecated "A special virtual environment". Use regular virtual environments instead.
+* Merge "The same interpreter which runs Thonny" and "Alternative Python 3 interpreter or virtual environment" back-ends into "Local Python 3"
+* Back-end switcher now remembers several configurations for remote CPython and MicroPython.
+* Make package manager work for remote Python 3 (SSH)
+
+Fixed
+-----
+* Fix issues with printouts containing more than 999 lines, #2118, #1646
+* Fall back to default theme when used 3rd party theme gets uninstalled, #2117
+* Fix problem with Files hamburger menu when nothing is selected, #2101
+* Fix Windows version detection in "Tools => Open system shell", #1961
+* Make sure Thonny's dialogs are treated as dialogs in macOS and Linux, #1790
+* Don't issue two Ctrl+C-s too quickly in row when interrupting MicroPython process, in order to give time for finally-blocks to clean up, #1757
+* Fix asm_pio error when working in with RP-pico in shell mode, #1718
+* Fix the crash when scripts longer than 4KB are sent to Python 3 SSH back-end, #1680
+* Properly interrupt MicroPython code before submitting new code when using F5 while code is running, #1668
+* Use "vista" Tk-theme instead of "xpnative" in Windows. Gives nicer combobox, #1663
+* Fix problems with full screen and split screen views in macOS, #1293, #1012
+* Fix the crash when pasting certain Unicode chars to editor in macOS, #32
+* Fix the crash caused by Cmd-backtick and others with Spanish keyboard in macOS, #886
+* Fix focus issues in dialogs, #2153
+* Fix automatic horizontal scrollbar not always appearing, #2169 and #659 by @jharris1993 and @lurch
+* Forward SSH password to the back-end process via stdin instead of command line.
+
 3.3.14 (2021-08-01)
 ===================
 * Fix problems in org.thonny.Thonny.appdata.xml

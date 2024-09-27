@@ -3,23 +3,40 @@
 Common container for board base pin names. These will vary from board to
 board so don't expect portability when using this module.
 
+Another common use of this module is to use serial communication buses with
+the default pins and settings.  For more information about serial communcication
+in CircuitPython, see the :mod:`busio`.
+
+For more information regarding the typical usage of :py:mod:`board`, refer to the `CircuitPython
+Essentials Learn guide
+<https://learn.adafruit.com/circuitpython-essentials/circuitpython-pins-and-modules>`_
+
 .. warning:: The board module varies by board. The APIs documented here may or may not be
              available on a specific board."""
-def I2C() -> Any:
-    """Returns the `busio.I2C` object for the board designated SDA and SCL pins. It is a singleton."""
+
+from __future__ import annotations
+
+import busio
+
+board_id: str
+"""Board ID string. The unique identifier for the board model in
+circuitpython, as well as on circuitpython.org.
+Example: "hallowing_m0_express"."""
+
+def I2C() -> busio.I2C:
+    """Returns the `busio.I2C` object for the board's designated I2C bus(es).
+    The object created is a singleton, and uses the default parameter values for `busio.I2C`.
+    """
     ...
 
-def SPI() -> Any:
-    """Returns the `busio.SPI` object for the board designated SCK, MOSI and MISO pins. It is a
-    singleton."""
+def SPI() -> busio.SPI:
+    """Returns the `busio.SPI` object for the board's designated SPI bus(es).
+    The object created is a singleton, and uses the default parameter values for `busio.SPI`.
+    """
     ...
 
-def UART() -> Any:
-    """Returns the `busio.UART` object for the board designated TX and RX pins. It is a singleton.
-
-    The object created uses the default parameter values for `busio.UART`. If you need to set
-    parameters that are not changeable after creation, such as ``receiver_buffer_size``,
-    do not use `board.UART()`; instead create a `busio.UART` object explicitly with the
-    desired parameters."""
+def UART() -> busio.UART:
+    """Returns the `busio.UART` object for the board's designated UART bus(es).
+    The object created is a singleton, and uses the default parameter values for `busio.UART`.
+    """
     ...
-

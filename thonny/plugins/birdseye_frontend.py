@@ -3,7 +3,7 @@ import os.path
 import subprocess
 from tkinter import messagebox
 
-from thonny import THONNY_USER_DIR, get_runner, get_workbench, running
+from thonny import get_runner, get_thonny_user_dir, get_workbench, running
 from thonny.languages import tr
 
 _server_started = False
@@ -11,20 +11,21 @@ _server_process = None
 
 
 def _start_debug_enabled():
-    return (
-        get_workbench().get_editor_notebook().get_current_editor() is not None
-        and "debug" in get_runner().get_supported_features()
+    from thonny.plugins.cpython_frontend import LocalCPythonProxy
+
+    return get_workbench().get_editor_notebook().get_current_editor() is not None and isinstance(
+        get_runner().get_backend_proxy(), LocalCPythonProxy
     )
 
 
 def start_server():
     global _server_process
 
-    out_err_filename = os.path.join(THONNY_USER_DIR, "birdseye.log")
+    out_err_filename = os.path.join(get_thonny_user_dir(), "birdseye.log")
     output_file = open(out_err_filename, "w")
     _server_process = subprocess.Popen(
         [
-            running.get_interpreter_for_subprocess(),
+            running.get_front_interpreter_for_subprocess(),
             "-m",
             "birdseye",
             "-p",
@@ -85,6 +86,6 @@ def load_plugin():
         caption="birdseye",
         tester=_start_debug_enabled,
         default_sequence="<Control-B>",
-        group=10,
+        group=11,
         image=os.path.join(os.path.dirname(__file__), "..", "res", "birdseye.png"),
     )

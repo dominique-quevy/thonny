@@ -3,15 +3,17 @@ import sys
 
 from setuptools import find_packages, setup
 
+
 def recursive_files(directory):
     paths = []
     for (path, _, filenames) in os.walk(directory):
         for filename in filenames:
-            paths.append(os.path.join('..', path, filename))
+            if not filename.endswith(".pyc") and filename != "registered.json":
+                paths.append(os.path.join('..', path, filename))
     return paths
 
-if sys.version_info < (3, 6):
-    raise RuntimeError("Thonny requires Python 3.6 or later")
+if sys.version_info < (3, 8):
+    raise RuntimeError("Thonny requires Python 3.8 or later")
 
 setupdir = os.path.dirname(__file__)
 
@@ -50,11 +52,11 @@ setup(
         "Programming Language :: Python",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3 :: Only",
-        "Programming Language :: Python :: 3.6",
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
         "Topic :: Education",
         "Topic :: Software Development",
         "Topic :: Software Development :: Debuggers",
@@ -67,18 +69,23 @@ setup(
     },
     platforms=["Windows", "macOS", "Linux"],
     install_requires=requirements,
-    python_requires=">=3.5",
+    python_requires=">=3.8",
     packages=find_packages(),
     package_data={
-        "": ["VERSION", "defaults.ini", "res/*"] + recursive_files("thonny/locale"),
+        "": ["VERSION", "defaults.ini", "res/*", "dbus/*"]
+            + recursive_files("thonny/locale")
+            + recursive_files("thonny/vendored_libs"),
         "thonny.plugins.help": ["*.rst"],
-        "thonny.plugins.pi": ["res/*.*"],
+        "thonny.plugins.pi": ["res/**"],
         "thonny.plugins.printing": ["*.html"],
-        "thonny.plugins.micropython": ["api_stubs/*.*"],
-        "thonny.plugins.circuitpython": ["api_stubs/*.*"],
-        "thonny.plugins.microbit": ["api_stubs/*.*"],
-        "thonny.plugins.esp": ["esp32_api_stubs/*.*", "esp_8266_api_stubs/*.*"],
+        "thonny.plugins.micropython": ["*api_stubs/**"],
+        "thonny.plugins.circuitpython": ["*api_stubs/**"],
+        "thonny.plugins.microbit": ["*api_stubs/**"],
+        "thonny.plugins.rp2040": ["*api_stubs/**"],
+        "thonny.plugins.ev3": ["*api_stubs/**"],
+        "thonny.plugins.prime_inventor": ["*api_stubs/**"],
+        "thonny.plugins.esp": ["*api_stubs/**"],
         "thonny.plugins.mypy": ["typeshed_extras/*.pyi"],
     },
-    entry_points={"gui_scripts": ["thonny = thonny:launch"]},
+    entry_points={"gui_scripts": ["thonny = thonny.main:run"]},
 )
