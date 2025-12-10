@@ -21,9 +21,10 @@ REPL_PSEUDO_FILENAME = "<stdin>"
 MESSAGE_MARKER = "\x02"
 OBJECT_LINK_START = "[object_link_for_thonny=%d]"
 OBJECT_LINK_END = "[/object_link_for_thonny]"
-REMOTE_PATH_MARKER = " :: "
 PROCESS_ACK = "OK"
 ALL_EXPLAINED_STATUS_CODE = 193
+
+NBSP = "\u00a0"
 
 IGNORED_FILES_AND_DIRS = [
     "System Volume Information",
@@ -63,7 +64,7 @@ TextRange = namedtuple("TextRange", ["lineno", "col_offset", "end_lineno", "end_
 @dataclass(frozen=True)
 class DistInfo:
     name: str
-    version: str
+    version: Optional[str]
     summary: Optional[str] = None
     license: Optional[str] = None
     author: Optional[str] = None
@@ -417,45 +418,6 @@ def update_system_path(env, value):
         env["PATH"] = value
 
 
-@dataclass
-class SignatureParameter:
-    kind: str
-    name: str
-    annotation: Optional[str]
-    default: Optional[str]
-
-
-@dataclass
-class SignatureInfo:
-    name: str
-    params: List[SignatureParameter]
-    return_type: Optional[str]
-    current_param_index: Optional[int] = None
-    call_bracket_start: Optional[Tuple[int, int]] = None
-
-
-@dataclass
-class CompletionInfo:
-    name: str
-    name_with_symbols: str
-    full_name: str
-    type: str
-    prefix_length: int  # the number of chars to be deleted before inserting name
-    signatures: Optional[List[SignatureInfo]]
-    docstring: Optional[str]
-    module_name: Optional[str]
-    module_path: Optional[str]
-
-
-@dataclass
-class NameReference:
-    module_name: str
-    module_path: str
-    row: int
-    column: int
-    length: int
-
-
 class UserError(RuntimeError):
     """Errors of this class are meant to be presented without stacktrace"""
 
@@ -795,14 +757,6 @@ def running_in_virtual_environment() -> bool:
     return sys.base_prefix != sys.prefix
 
 
-def is_remote_path(s: str) -> bool:
-    return REMOTE_PATH_MARKER in s
-
-
-def is_local_path(s: str) -> bool:
-    return not is_remote_path(s) and not s.startswith("<")
-
-
 def export_distributions_info_from_dir(dir_path: str) -> List[DistInfo]:
     from importlib.metadata import DistributionFinder, MetadataPathFinder
 
@@ -913,7 +867,12 @@ def try_get_base_executable(executable: str) -> Optional[str]:
             continue
 
         if "executable" in atts:
+            # venv-s starting with Python 3.11
             return atts["executable"]
+
+        if "base-executable" in atts:
+            # virtualenv-s starting with ???
+            return atts["base-executable"]
 
     # pyvenv.cfg may be present also in non-virtual envs.
     # I can check for this in certain case
@@ -925,7 +884,7 @@ def try_get_base_executable(executable: str) -> Optional[str]:
         may_be_venv_exe = False
 
     if may_be_venv_exe:
-        # should only happen with venv-s before Python 3.11
+        # should only happen with venv-s before Python 3.11 or with uv
         # as Python 3.11 started recording executable in pyvenv.cfg
         logger.warning("Could not find base executable of %s", executable)
         return None

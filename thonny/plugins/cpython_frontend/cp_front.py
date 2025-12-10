@@ -8,7 +8,7 @@ from tkinter import ttk
 from typing import Any, Dict, List, Optional, Tuple
 
 import thonny
-from thonny import get_runner, get_shell, get_workbench, ui_utils
+from thonny import SUPPORTED_VERSIONS, get_runner, get_shell, get_workbench, ui_utils
 from thonny.base_file_browser import (
     FILE_DIALOG_HEIGHT_EMS_OPTION,
     FILE_DIALOG_WIDTH_EMS_OPTION,
@@ -44,7 +44,7 @@ class LocalCPythonProxy(SubprocessProxy):
             get_shell().report_exception()
 
     def compute_mgmt_executable(self):
-        get_workbench().get_option("LocalCPython.executable")
+        return get_workbench().get_option("LocalCPython.executable")
 
     def get_mgmt_executable_validation_error(self) -> Optional[str]:
         if not os.path.isfile(self._mgmt_executable):
@@ -94,9 +94,6 @@ class LocalCPythonProxy(SubprocessProxy):
         super()._close_backend()
 
     def get_target_executable(self):
-        return self._mgmt_executable
-
-    def get_executable(self):
         return self._reported_executable
 
     def get_base_executable(self) -> Optional[str]:
@@ -185,6 +182,9 @@ class LocalCPythonProxy(SubprocessProxy):
     def has_local_interpreter(self):
         return True
 
+    def interpreter_is_cpython_compatible(self) -> bool:
+        return True
+
     def can_debug(self) -> bool:
         return True
 
@@ -245,9 +245,7 @@ class LocalCPythonProxy(SubprocessProxy):
 
     def get_packages_target_dir_with_comment(self):
         if self.is_externally_managed():
-            return None, tr(
-                "The packages of this interpreter can be managed via your system package manager."
-            ) + "\n" + tr("For pip-installing a package, you need to use a virtual environment.")
+            return None, self.get_externally_managed_message()
 
         if self._prefer_user_install():
             usp = self.get_user_site_packages()
@@ -268,6 +266,7 @@ class LocalCPythonConfigurationPage(TabbedBackendDetailsConfigurationPage):
         super().__init__(master)
 
         self.executable_page = self.create_and_add_empty_page(tr("Executable"))
+        self.stubs_page = self.create_and_add_stubs_page(proxy_class=self.proxy_class)
 
         self._exe_variable = get_workbench().get_variable("LocalCPython.executable")
 
@@ -293,7 +292,7 @@ class LocalCPythonConfigurationPage(TabbedBackendDetailsConfigurationPage):
         self._select_button.grid(row=1, column=2, sticky="e", padx=(10, 0))
         self.executable_page.columnconfigure(1, weight=1)
 
-        extra_text = tr("NB! Thonny only supports Python %s and later") % "3.9"
+        extra_text = tr("NB! Thonny only supports Python %s and later") % SUPPORTED_VERSIONS[0]
         extra_label = ttk.Label(self.executable_page, text=extra_text)
         extra_label.grid(row=2, column=1, columnspan=2, pady=10, sticky="w")
 

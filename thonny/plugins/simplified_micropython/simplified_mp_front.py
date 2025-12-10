@@ -1,3 +1,4 @@
+import os.path
 import sys
 from time import sleep
 from typing import List, Optional, Tuple
@@ -40,6 +41,10 @@ class SimplifiedMicroPythonProxy(BareMetalMicroPythonProxy):
 
     def get_packages_target_dir_with_comment(self) -> Tuple[Optional[str], Optional[str]]:
         return None, tr("This device does not support packages")
+
+    @classmethod
+    def get_vendored_user_stubs_ids(cls) -> List[str]:
+        return ["micropython-simplified-typeshed"]
 
 
 class SimplifiedMicroPythonConfigPage(BareMetalMicroPythonConfigPage):

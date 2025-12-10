@@ -162,6 +162,7 @@ class CodeView(tktextext.EnhancedTextFrame):
             undo=True,
             wrap=tk.NONE,
             horizontal_scrollbar_class=ui_utils.AutoScrollbar,
+            vertical_scrollbar_rowspan=2,
             **frame_args,
         )
 
@@ -186,8 +187,11 @@ class CodeView(tktextext.EnhancedTextFrame):
         self._gutter.tag_configure("active", font="BoldEditorFont")
         self._gutter.tag_raise("spacer")
 
-    def get_content(self):
-        return self.text.get("1.0", "end-1c")  # -1c because Text always adds a newline itself
+    def get_content(self, up_to_end=False):
+        if not up_to_end:
+            return self.text.get("1.0", "end-1c")  # -1c because Text always adds a newline itself
+        else:
+            return self.text.get("1.0", "end")
 
     def detect_encoding(self, data):
         enc = self.detect_encoding_without_check(data)
@@ -536,7 +540,6 @@ def perform_python_return(text: EnhancedText, event):
     finally:
         text.see("insert")
         text.event_generate("<<NewLine>>")
-        return "break"
 
 
 def perform_simple_return(text: EnhancedText, event):
@@ -571,7 +574,6 @@ def perform_simple_return(text: EnhancedText, event):
     finally:
         text.see("insert")
         text.event_generate("<<NewLine>>")
-        return "break"
 
 
 class BinaryFileException(RuntimeError):

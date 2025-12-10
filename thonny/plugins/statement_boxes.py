@@ -1,5 +1,5 @@
 """
-NB! Stippling doesn't work on mac: 
+NB! Stippling doesn't work on mac:
 http://wiki.tcl.tk/44444
 http://rkeene.org/projects/tcl/tk.fossil/tkthistory/2954673
 """
@@ -11,6 +11,8 @@ from tkinter import font
 import thonny
 from thonny import get_workbench
 from thonny.codeview import get_syntax_options_for_tag
+
+logger = getLogger(__name__)
 
 
 def create_bitmap_file(width, height, predicate, name):
@@ -147,7 +149,7 @@ def clear_tags(text):
 def add_tags(text):
     source = text.get("1.0", "end")
     clear_tags(text)
-    # tree = jedi_ utils.parse_source(source)
+    tree = ...  # TODO
 
     print_tree(tree)
     last_line = 0

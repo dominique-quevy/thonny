@@ -10,22 +10,18 @@ import time
 import tkinter as tk
 import tkinter.font
 import traceback
-from _tkinter import TclError
-from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from logging import getLogger
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union  # @UnusedImport
 
+from _tkinter import TclError
+
 from thonny import get_workbench, misc_utils, tktextext
 from thonny.common import TextRange, normpath_with_actual_case
-from thonny.custom_notebook import CustomNotebook, CustomNotebookPage, CustomNotebookTab
+from thonny.custom_notebook import CustomNotebook, CustomNotebookPage
 from thonny.languages import get_button_padding, tr
-from thonny.misc_utils import (
-    running_on_linux,
-    running_on_mac_os,
-    running_on_rpi,
-    running_on_windows,
-)
+from thonny.misc_utils import running_on_linux, running_on_mac_os, running_on_windows
 from thonny.tktextext import TweakableText
 
 PARENS_REGEX = re.compile(r"[\(\)\{\}\[\]]")
@@ -735,7 +731,7 @@ class EnhancedTextWithLogging(tktextext.EnhancedText):
             if index2 is not None:
                 concrete_index2 = self.index(index2)
             else:
-                concrete_index2 = None
+                concrete_index2 = self.index(index1 + " +1c")
 
             chars = self.get(index1, index2)
             self._last_event_changed_line_count = "\n" in chars
@@ -2570,6 +2566,8 @@ def check_create_heading_stripe(master) -> Optional[tk.Frame]:
         # don't know why it happens sometimes
         assert len(px_to_hide) == 1
         px_to_hide = px_to_hide[0]
+    elif isinstance(px_to_hide, str):
+        px_to_hide = int(px_to_hide)
     background = opts.get("background")
     if px_to_hide > 0 and background is not None:
         return HeadingStripe(master, height=px_to_hide, background=background)
@@ -2637,6 +2635,61 @@ def set_windows_titlebar_darkness(window: tk.Tk, value: int):
         print("got with second", result)
     else:
         print("got with first", result)
+
+
+def update_text_height(text: tk.Text, min_lines: int, max_lines: int) -> None:
+    if text.winfo_width() < 10:
+        logger.info("Skipping text height update because width is %s", text.winfo_width())
+        return
+    required_height = text.tk.call((text, "count", "-update", "-displaylines", "1.0", "end"))
+    text.configure(height=min(max(required_height, min_lines), max_lines))
+
+
+@dataclass
+class TreeviewLayout:
+    open_ids: List[str]
+    first_visible_iid: str
+    selection: Tuple[str]
+
+
+def export_treeview_layout(tree: ttk.Treeview) -> TreeviewLayout:
+    first_visible_iid = tree.identify_row(0)
+
+    return TreeviewLayout(
+        open_ids=get_treeview_open_item_ids(tree),
+        first_visible_iid=first_visible_iid,
+        selection=tree.selection(),
+    )
+
+
+def restore_treeview_layout(tree: ttk.Treeview, state: TreeviewLayout) -> None:
+    def open_close_nodes(iid):
+        tree.item(iid, open=iid in state.open_ids)
+        for child_iid in tree.get_children(iid):
+            open_close_nodes(child_iid)
+
+    open_close_nodes("")
+
+    selection = [iid for iid in state.selection if tree.exists(iid)]
+    tree.selection_set(selection)
+
+    if tree.exists(state.first_visible_iid):
+        tree.see(state.first_visible_iid)
+
+
+def get_treeview_open_item_ids(tree: ttk.Treeview, parent: str = "") -> List[str]:
+    result = []
+    for child in tree.get_children(parent):
+        if tree.item(child, "open"):
+            result.append(child)
+            result.extend(get_treeview_open_item_ids(tree, child))
+
+    return result
+
+
+def parse_text_index(index: str) -> Tuple[int, int]:
+    line, col = map(int, index.split(".", maxsplit=1))
+    return line, col
 
 
 if __name__ == "__main__":

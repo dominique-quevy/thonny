@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import _thread
 import io
 import os.path
 import pathlib
@@ -9,7 +8,6 @@ import sys
 import threading
 import time
 import traceback
-import warnings
 from abc import ABC, abstractmethod
 from logging import getLogger
 from typing import Any, BinaryIO, Callable, Dict, Iterable, List, Optional, Tuple, Union
@@ -32,11 +30,9 @@ from thonny.common import (  # TODO: try to get rid of this
     ToplevelResponse,
     UserError,
     execute_with_frontend_sys_path,
-    is_local_path,
     parse_message,
     read_one_incoming_message_str,
     serialize_message,
-    try_load_modules_with_frontend_sys_path,
     universal_dirname,
 )
 
@@ -255,7 +251,6 @@ class MainBackend(BaseBackend, ABC):
 
     def __init__(self):
         self._command_handlers = {}
-        self._jedi_is_loaded = False
         BaseBackend.__init__(self)
 
     def add_command(self, command_name, handler):
@@ -265,13 +260,6 @@ class MainBackend(BaseBackend, ABC):
         or a BackendResponse
         """
         self._command_handlers[command_name] = handler
-
-    def send_message(self, msg: MessageFromBackend) -> None:
-        super().send_message(msg)
-
-        # take the time for pre-loading jedi after the first toplevel response
-        if isinstance(msg, ToplevelResponse):
-            self._check_load_jedi()
 
     def _handle_normal_command(self, cmd: CommandToBackend) -> None:
         assert isinstance(cmd, (ToplevelCommand, InlineCommand))
@@ -333,136 +321,6 @@ class MainBackend(BaseBackend, ABC):
         """Returns info about all items under and including cmd.paths"""
         return {"all_items": self._get_paths_info(cmd.source_paths, recurse=True)}
 
-    def _cmd_shell_autocomplete(self, cmd):
-        error = None
-        try:
-            from thonny import jedi_utils
-        except ImportError:
-            completions = []
-            error = "Could not import jedi"
-        else:
-            import __main__
-
-            with warnings.catch_warnings():
-                completions = jedi_utils.get_interpreter_completions(
-                    cmd.source, [__main__.__dict__], sys_path=self._get_sys_path_for_analysis()
-                )
-
-        return dict(
-            source=cmd.source,
-            completions=completions,
-            error=error,
-            row=cmd.row,
-            column=cmd.column,
-        )
-
-    def _cmd_editor_autocomplete(self, cmd):
-        logger.debug("Starting _cmd_editor_autocomplete")
-        error = None
-        try:
-            from thonny import jedi_utils
-
-            sys_path = self._get_sys_path_for_analysis()
-
-            # add current dir for local files
-            """
-            if cmd.filename and is_local_path(cmd.filename):
-                sys_path.insert(0, os.getcwd())
-                logger.debug("editor autocomplete with %r", sys_path)
-            """
-
-            with warnings.catch_warnings():
-                completions = jedi_utils.get_script_completions(
-                    cmd.source,
-                    cmd.row,
-                    cmd.column,
-                    cmd.filename,
-                    sys_path=sys_path,
-                )
-        except ImportError:
-            completions = []
-            error = "Could not import jedi"
-
-        return dict(
-            source=cmd.source,
-            row=cmd.row,
-            column=cmd.column,
-            filename=cmd.filename,
-            completions=completions,
-            error=error,
-        )
-
-    def _cmd_get_completion_details(self, cmd):
-        # it is assumed this gets called after requesting editor or shell completions
-        from thonny import jedi_utils
-
-        return InlineResponse(
-            "get_completion_details",
-            full_name=cmd.full_name,
-            details=jedi_utils.get_completion_details(cmd.full_name),
-        )
-
-    def _cmd_get_editor_calltip(self, cmd):
-        from thonny import jedi_utils
-
-        signatures = jedi_utils.get_script_signatures(
-            cmd.source,
-            cmd.row,
-            cmd.column,
-            cmd.filename,
-            sys_path=self._get_sys_path_for_analysis(),
-        )
-        return InlineResponse(
-            "get_editor_calltip",
-            source=cmd.source,
-            row=cmd.row,
-            column=cmd.column,
-            filename=cmd.filename,
-            signatures=signatures,
-        )
-
-    def _cmd_get_shell_calltip(self, cmd):
-        import __main__
-        from thonny import jedi_utils
-
-        signatures = jedi_utils.get_interpreter_signatures(
-            cmd.source, [__main__.__dict__], sys_path=self._get_sys_path_for_analysis()
-        )
-        return InlineResponse(
-            "get_shell_calltip",
-            source=cmd.source,
-            row=cmd.row,
-            column=cmd.column,
-            filename=cmd.filename,
-            signatures=signatures,
-        )
-
-    def _cmd_highlight_occurrences(self, cmd):
-        from thonny import jedi_utils
-
-        refs = jedi_utils.get_references(
-            cmd.source,
-            cmd.row,
-            cmd.column,
-            cmd.filename,
-            scope="file",
-            sys_path=self._get_sys_path_for_analysis(),
-        )
-
-        return {"references": refs, "text_last_operation_time": cmd.text_last_operation_time}
-
-    def _cmd_get_definitions(self, cmd):
-        from thonny import jedi_utils
-
-        defs = jedi_utils.get_definitions(
-            cmd.source,
-            cmd.row,
-            cmd.column,
-            filename=cmd.filename,
-            sys_path=self._get_sys_path_for_analysis(),
-        )
-        return {"definitions": defs}
-
     def _cmd_get_active_distributions(self, cmd):
         raise NotImplementedError()
 
@@ -474,9 +332,6 @@ class MainBackend(BaseBackend, ABC):
 
     def _cmd_uninstall_distributions(self, cmd):
         raise NotImplementedError()
-
-    def _get_sys_path_for_analysis(self) -> Optional[List[str]]:
-        return None
 
     def _get_paths_info(self, paths: List[str], recurse: bool) -> Dict[str, Dict]:
         result = {}
@@ -531,16 +386,6 @@ class MainBackend(BaseBackend, ABC):
     @abstractmethod
     def _get_sep(self) -> str:
         """Returns symbol for combining parent directory path and child name"""
-
-    def _check_load_jedi(self) -> None:
-        if self._jedi_is_loaded:
-            return
-        logger.info("Loading Jedi")
-
-        report_time("Before loading Jedi")
-        try_load_modules_with_frontend_sys_path(["jedi", "parso"])
-        self._jedi_is_loaded = True
-        report_time("After loading Jedi")
 
 
 class UploadDownloadMixin(ABC):
@@ -763,13 +608,14 @@ class RemoteProcess:
 
 
 class SshMixin(UploadDownloadMixin):
-    def __init__(self, host, user, password, interpreter, cwd):
+    def __init__(self, host, port, user, password, interpreter, cwd):
         # UploadDownloadMixin.__init__(self)
         execute_with_frontend_sys_path(self._try_load_paramiko)
         import paramiko
         from paramiko.client import AutoAddPolicy, SSHClient
 
         self._host = host
+        self._port = port
         self._user = user
         self._password = password
         self._target_interpreter = interpreter
@@ -800,6 +646,7 @@ class SshMixin(UploadDownloadMixin):
         try:
             self._client.connect(
                 hostname=self._host,
+                port=int(self._port) if self._port else 22,
                 username=self._user,
                 password=self._password,
                 passphrase=self._password,

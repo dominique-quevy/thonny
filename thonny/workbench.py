@@ -4,6 +4,7 @@ import collections
 import importlib
 import json
 import os.path
+import pathlib
 import pkgutil
 import platform
 import queue
@@ -36,16 +37,49 @@ from thonny.common import Record, UserError, normpath_with_actual_case
 from thonny.config import try_load_configuration
 from thonny.config_ui import ConfigurationDialog
 from thonny.custom_notebook import CustomNotebook, CustomNotebookPage
-from thonny.editors import Editor, EditorNotebook, is_local_path
+from thonny.editors import Editor, EditorNotebook
 from thonny.languages import tr
+from thonny.lsp_proxy import LanguageServerProxy
+from thonny.lsp_types import (
+    ClientCapabilities,
+    ClientInfo,
+    CompletionClientCapabilities,
+    CompletionClientCapabilitiesCompletionItem,
+    CompletionClientCapabilitiesCompletionList,
+    DefinitionClientCapabilities,
+    DiagnosticWorkspaceClientCapabilities,
+    DocumentHighlightClientCapabilities,
+    DocumentSymbolClientCapabilities,
+    GeneralClientCapabilities,
+    InitializeParams,
+    LspResponse,
+    MarkupKind,
+    PositionEncodingKind,
+    PublishDiagnosticsClientCapabilities,
+    SignatureHelpClientCapabilities,
+    SignatureHelpClientCapabilitiesParameterInformation,
+    SignatureHelpClientCapabilitiesSignatureInformation,
+    SymbolKind,
+    SymbolKinds,
+    TextDocumentClientCapabilities,
+    TextDocumentSyncClientCapabilities,
+    TraceValues,
+    WindowClientCapabilities,
+    WorkspaceClientCapabilities,
+    WorkspaceFolder,
+)
 from thonny.misc_utils import (
     copy_to_clipboard,
     get_menu_char,
+    is_editor_supported_uri,
+    is_local_project_dir,
     running_on_linux,
     running_on_mac_os,
     running_on_rpi,
     running_on_windows,
+    uri_to_legacy_filename,
 )
+from thonny.program_analysis import ProgramAnalyzer
 from thonny.running import BackendProxy, Runner
 from thonny.shell import ShellView
 from thonny.ui_utils import (
@@ -135,6 +169,7 @@ class Workbench(tk.Tk):
         self._is_portable = is_portable()
         self._event_queue = queue.Queue()  # Can be appended to by threads
         self._event_polling_id = None
+        self._ls_proxies: List[LanguageServerProxy] = []
         self.initializing = True
 
         self._secrets: Dict[str, str] = {}
@@ -159,12 +194,14 @@ class Workbench(tk.Tk):
         )  # type: Dict[str, Dict[str, str]] # theme-based alternative images
         self._current_theme_name = "clam"  # will be overwritten later
         self._backends = {}  # type: Dict[str, BackendSpec]
+        self._language_server_proxy_classes: List[Type[LanguageServerProxy]] = []
         self.assistants: Dict[str, assistance.Assistant] = {}
         self._commands = []  # type: List[Dict[str, Any]]
         self._notebook_drop_targets: List[tk.Widget] = []
         self._toolbar_buttons = {}
         self._view_records = {}  # type: Dict[str, Dict[str, Any]]
         self.content_inspector_classes = []  # type: List[Type]
+        self.program_analyzers: Dict[str, ProgramAnalyzer] = {}
         self._latin_shortcuts = {}  # type: Dict[Tuple[int,int], List[Tuple[Callable, Callable]]]
         self._os_dark_mode = os_is_in_dark_mode()
         self._init_language()
@@ -246,33 +283,39 @@ class Workbench(tk.Tk):
             ):
                 print(name)
         """
-
         self.bind("<Visibility>", self._on_visibility, True)
+        self.become_active_window()
         self.after(1, self._start_runner)  # Show UI already before waiting for the backend to start
 
     def _on_visibility(self, event):
         if not self._have_seen_visibility_events:
             self._have_seen_visibility_events = True
             logger.info("First <Visibility> event")
+            self.update_idletasks()
             self.after_idle(self.finalize_startup)
 
     def finalize_startup(self):
         logger.info("Finalizing startup")
-        self.ready = True
-        self.event_generate("WorkbenchReady")
-        self._editor_notebook.update_appearance()
-        if self._configuration_manager.error_reading_existing_file:
-            messagebox.showerror(
-                "Problem",
-                f"Previous configuration could not be read:\n\n"
-                f"{self._configuration_manager.error_reading_existing_file}).\n\n"
-                "Using default settings",
-                master=self,
-            )
-        self._editor_notebook.load_previous_files()
-        self._load_stuff_from_command_line(self._initial_args)
-        self._editor_notebook.focus_set()
-        self.poll_events()
+        try:
+            self.ready = True
+            self._editor_notebook.update_appearance()
+            if self._configuration_manager.error_reading_existing_file:
+                messagebox.showerror(
+                    "Problem",
+                    f"Previous configuration could not be read:\n\n"
+                    f"{self._configuration_manager.error_reading_existing_file}).\n\n"
+                    "Using default settings",
+                    master=self,
+                )
+            self._editor_notebook.load_previous_files()
+            self._load_stuff_from_command_line(self._initial_args)
+            self._editor_notebook.focus_set()
+            self.event_generate("WorkbenchReady")
+            self.poll_events()
+            self._check_version_alignment()
+        except Exception:
+            logger.exception("Exception while finalizing startup")
+            self.report_exception()
 
     def poll_events(self) -> None:
         if self._event_queue is None or self._closing:
@@ -345,6 +388,9 @@ class Workbench(tk.Tk):
         self.set_default("general.large_icon_rowheight_threshold", 32)
         self.set_default("file.use_zenity", False)
         self.set_default("run.working_directory", os.path.expanduser("~"))
+        self.set_default(
+            "general.data_url_prefix", "https://raw.githubusercontent.com/thonny/thonny/master/data"
+        )
 
         self.set_default("layout.visible_views", [])
         for nb_name in VIEW_LOCATION_CODES:
@@ -352,6 +398,9 @@ class Workbench(tk.Tk):
             self.set_default("layout.notebook_" + nb_name + "_selected_view", None)
 
         self.update_debug_mode()
+
+    def get_data_url(self, file_name) -> str:
+        return self.get_option("general.data_url_prefix") + "/" + file_name
 
     def _get_secrets_path(self) -> str:
         return os.path.join(get_thonny_user_dir(), "secrets.json")
@@ -378,6 +427,111 @@ class Workbench(tk.Tk):
     def update_debug_mode(self):
         os.environ["THONNY_DEBUG"] = str(self.get_option("general.debug_mode", False))
         thonny.set_logging_level()
+
+    def get_main_language_server_proxy(self) -> Optional[LanguageServerProxy]:
+        if self._ls_proxies:
+            return self._ls_proxies[0]
+        return None
+
+    def get_initialized_ls_proxies(self) -> List[LanguageServerProxy]:
+        return [ls_proxy for ls_proxy in self._ls_proxies if ls_proxy.is_initialized()]
+
+    def start_or_restart_language_servers(self) -> None:
+        self.shut_down_language_servers()
+
+        for class_ in self._language_server_proxy_classes:
+            logger.info("Constructing language server %s", class_)
+            ls_proxy = class_(
+                InitializeParams(
+                    capabilities=ClientCapabilities(
+                        workspace=WorkspaceClientCapabilities(
+                            applyEdit=None,
+                            codeLens=None,
+                            fileOperations=None,
+                            inlineValue=None,
+                            inlayHint=None,
+                            diagnostics=None,
+                            # workspaceFolders=True, # TODO: This may require workspace/didChangeWorkspaceFolders to activate Pyright?
+                        ),
+                        textDocument=TextDocumentClientCapabilities(
+                            publishDiagnostics=PublishDiagnosticsClientCapabilities(
+                                relatedInformation=False
+                            ),
+                            synchronization=TextDocumentSyncClientCapabilities(),
+                            documentSymbol=DocumentSymbolClientCapabilities(
+                                symbolKind=SymbolKinds(
+                                    [
+                                        SymbolKind.Enum,
+                                        SymbolKind.Class,
+                                        SymbolKind.Method,
+                                        SymbolKind.Property,
+                                        SymbolKind.Function,
+                                    ]
+                                ),
+                                hierarchicalDocumentSymbolSupport=True,
+                            ),
+                            completion=CompletionClientCapabilities(
+                                completionItem=CompletionClientCapabilitiesCompletionItem(
+                                    snippetSupport=False,
+                                    commitCharactersSupport=True,
+                                    documentationFormat=None,  # TODO
+                                    deprecatedSupport=False,  # TODO
+                                    preselectSupport=True,
+                                    insertReplaceSupport=True,
+                                    labelDetailsSupport=False,
+                                ),
+                                completionItemKind=None,  # TODO
+                                insertTextMode=None,
+                                contextSupport=False,
+                                completionList=CompletionClientCapabilitiesCompletionList(
+                                    itemDefaults=["commitCharacters"]
+                                ),
+                            ),
+                            signatureHelp=SignatureHelpClientCapabilities(
+                                signatureInformation=SignatureHelpClientCapabilitiesSignatureInformation(
+                                    documentationFormat=[MarkupKind.PlainText, MarkupKind.Markdown],
+                                    parameterInformation=SignatureHelpClientCapabilitiesParameterInformation(
+                                        labelOffsetSupport=True
+                                    ),
+                                    activeParameterSupport=True,
+                                )
+                            ),
+                            definition=DefinitionClientCapabilities(linkSupport=True),
+                            documentHighlight=DocumentHighlightClientCapabilities(),
+                        ),
+                        notebookDocument=None,
+                        window=WindowClientCapabilities(
+                            workDoneProgress=None,
+                            showMessage=None,
+                            showDocument=None,
+                        ),
+                        general=GeneralClientCapabilities(
+                            staleRequestSupport=None,
+                            regularExpressions=None,
+                            markdown=None,
+                            positionEncodings=[PositionEncodingKind.UTF16],
+                        ),
+                    ),
+                    processId=os.getpid(),
+                    clientInfo=ClientInfo(name="Thonny", version=thonny.get_version()),
+                    locale=self.get_option("general.language"),
+                    workspaceFolders=[
+                        WorkspaceFolder(
+                            uri=pathlib.Path(self.get_local_cwd()).as_uri(), name="localws"
+                        ),
+                    ],
+                    trace=TraceValues.Verbose if self.in_debug_mode() else TraceValues.Messages,
+                )
+            )
+
+            self._ls_proxies.append(ls_proxy)
+
+    def shut_down_language_servers(self):
+        for ls_proxy in self._ls_proxies:
+            logger.info("Shutting down language server %s", ls_proxy)
+            ls_proxy.shut_down()
+
+        self._ls_proxies = []
 
     def _init_language(self) -> None:
         """Initialize language."""
@@ -542,6 +696,12 @@ class Workbench(tk.Tk):
 
         small_link_ratio = 0.8 if running_on_windows() else 0.7
         self._fonts = [
+            tk_font.Font(
+                name="LinkFont",
+                family=default_font.cget("family"),
+                size=int(default_font.cget("size")),
+                underline=True,
+            ),
             tk_font.Font(
                 name="SmallLinkFont",
                 family=default_font.cget("family"),
@@ -1058,6 +1218,7 @@ class Workbench(tk.Tk):
                 logger.warning("Problem with switcher popup", exc_info=e)
 
     def _on_backend_restart(self, event):
+        logger.info("Handling backend restart")
         proxy = get_runner().get_backend_proxy()
         if proxy:
             conf = proxy.get_current_switcher_configuration()
@@ -1071,6 +1232,8 @@ class Workbench(tk.Tk):
         self._last_active_backend_conf_variable_value = switcher_value
         self._backend_button.configure(text=desc + "  " + get_menu_char())
         self._update_connection_button()
+
+        self.start_or_restart_language_servers()
 
     def _on_backend_terminated(self, event):
         self._update_connection_button()
@@ -1324,6 +1487,9 @@ class Workbench(tk.Tk):
                 toolbar_group,
             )
 
+    def set_status_message(self, text: str) -> None:
+        self._status_label.configure(text=text)
+
     def add_view(
         self,
         cls: Type[tk.Widget],
@@ -1403,6 +1569,9 @@ class Workbench(tk.Tk):
     def add_assistant(self, name: str, assistant: assistance.Assistant):
         self.assistants[name.lower()] = assistant
 
+    def add_language_server_proxy_class(self, proxy_class: Type[LanguageServerProxy]):
+        self._language_server_proxy_classes.append(proxy_class)
+
     def add_backend(
         self,
         name: str,
@@ -1421,7 +1590,7 @@ class Workbench(tk.Tk):
 
         self.set_default(f"{name}.last_configurations", [])
 
-        # assing names to related classes
+        # assign names to related classes
         proxy_class.backend_name = name  # type: ignore
         proxy_class.backend_description = description  # type: ignore
         config_page_constructor.backend_name = name
@@ -1447,6 +1616,12 @@ class Workbench(tk.Tk):
             warn(tr("Overwriting theme '%s'") % name)
 
         self._syntax_themes[name] = (parent, settings)
+
+    def add_program_analyzer(
+        self, name: str, analyzer: ProgramAnalyzer, enabled_by_default: bool = True
+    ):
+        self.set_default(f"analysis.{name}.enabled", enabled_by_default)
+        self.program_analyzers[name] = analyzer
 
     def get_usable_ui_theme_names(self) -> List[str]:
         return sorted([name for name in self._ui_themes if self._ui_themes[name][0] is not None])
@@ -1768,6 +1943,16 @@ class Workbench(tk.Tk):
         else:
             return normpath_with_actual_case(os.path.expanduser("~"))
 
+    def get_local_project_path(self) -> Optional[str]:
+        dir_path = self.get_local_cwd()
+
+        while dir_path and dir_path[-1] not in ["/", "\\", ":"]:
+            if is_local_project_dir(dir_path):
+                return dir_path
+            dir_path = os.path.dirname(dir_path)
+
+        return None
+
     def set_local_cwd(self, value: str) -> None:
         if self.get_option("run.working_directory") != value:
             self.set_option("run.working_directory", value)
@@ -2007,7 +2192,11 @@ class Workbench(tk.Tk):
             assert new_notebook is old_notebook
             new_notebook.remember_open_files()
             editor: Editor = page.content
-            self.event_generate("MoveEditor", filename=editor.get_filename())
+            self.event_generate(
+                "MoveEditor",
+                uri=editor.get_uri(),
+                filename=uri_to_legacy_filename(editor.get_uri()),
+            )
         else:
             assert isinstance(new_notebook, ViewNotebook)
             assert isinstance(old_notebook, ViewNotebook)
@@ -2606,6 +2795,7 @@ class Workbench(tk.Tk):
             return
 
         self._closing = True
+        self.shut_down_language_servers()
         try:
             from thonny.plugins import replayer
 
@@ -2711,7 +2901,7 @@ class Workbench(tk.Tk):
             logger.info("Got KeyboardInterrupt, closing")
             self._on_close()
             return
-        self.report_exception()
+        self.report_exception(title="Internal Tk error")
 
     def report_exception(self, title: str = "Internal error") -> None:
         logger.exception(title)
@@ -2720,11 +2910,20 @@ class Workbench(tk.Tk):
             assert typ is not None
             if issubclass(typ, UserError):
                 msg = str(value)
+                status_prefix = ""
             else:
-                msg = traceback.format_exc()
+                msg = f"{str(value) or type(value)}\nSee frontend.log for more details"
+                status_prefix = "INTERNAL ERROR: "
 
-            dlg = ui_utils.LongTextDialog(title, msg, parent=self)
-            ui_utils.show_dialog(dlg, self)
+            try:
+                self.set_status_message(status_prefix + msg)
+                messagebox.showerror(
+                    title,
+                    msg,
+                    parent=tk._default_root,
+                )
+            except Exception:
+                logger.exception("Could not show internal error")
 
     def _convert_view_id(self, view_id: str):
         if view_id == "GlobalsView":
@@ -2751,13 +2950,6 @@ class Workbench(tk.Tk):
         # otherwise it may miss globals events
         # and will show empty table on open
         self.get_view("VariablesView")
-
-        # also, make sure AssistantView is loaded so that it can handle
-        if (
-            self.get_option("assistance.open_assistant_on_errors")
-            or self.get_option("assistance.open_assistant_on_warnings")
-        ) and (self.get_ui_mode() != "simple" or "AssistantView" in SIMPLE_MODE_VIEWS):
-            self.get_view("AssistantView")
 
     def _save_layout(self) -> None:
         self.update_idletasks()
@@ -2802,17 +2994,18 @@ class Workbench(tk.Tk):
 
         profile = self.get_profile()
         if profile != "default":
-            title_text += f"〈 {profile} 〉"
+            title_text += f" 〈 {profile} 〉 "
+        else:
+            title_text += "  -  "
 
         if editor is not None:
-            title_text += "  -  " + editor.get_long_description()
+            title_text += editor.get_long_description().replace(os.path.expanduser("~"), "~")
 
         self.title(title_text)
 
         if running_on_mac_os() and editor is not None:
-            current_file = editor.get_filename()
-            if current_file and is_local_path(current_file) and os.path.exists(current_file):
-                self.wm_attributes("-titlepath", current_file)
+            if editor.is_local() and os.path.exists(editor.get_target_path()):
+                self.wm_attributes("-titlepath", editor.get_target_path())
             else:
                 self.wm_attributes("-titlepath", "")
 
@@ -2840,16 +3033,20 @@ class Workbench(tk.Tk):
         else:
             self.focus_set()
 
-    def open_url(self, url):
-        m = re.match(r"^thonny-editor://(.*?)(#(\d+)(:(\d+))?)?$", url)
-        if m is not None:
-            filename = m.group(1).replace("%20", " ")
-            lineno = None if m.group(3) is None else int(m.group(3))
-            col_offset = None if m.group(5) is None else int(m.group(5))
-            if lineno is None:
-                self.get_editor_notebook().show_file(filename)
-            else:
-                self.get_editor_notebook().show_file_at_line(filename, lineno, col_offset)
+    def open_url(self, url: str) -> None:
+        if is_editor_supported_uri(url):
+            parts = url.rsplit("#", maxsplit=1)
+            if len(parts) == 1:
+                self.get_editor_notebook().show_file(url)
+            elif len(parts) == 2:
+                uri = parts[0]
+                loc_parts = parts[1].split(":")
+                lineno = int(loc_parts[0])
+                if len(loc_parts) > 1:
+                    col_offset = int(loc_parts[1])
+                else:
+                    col_offset = None
+                self.get_editor_notebook().show_file_at_line(uri, lineno, col_offset)
 
             return
 
@@ -2975,6 +3172,19 @@ class Workbench(tk.Tk):
             self.set_option("run.backend_name", "LocalCPython")
             self.set_option("LocalCPython.executable", created_exe)
             get_runner().restart_backend(False)
+
+    def _check_version_alignment(self):
+        # A smoke test and a guard against forgetting to update one of the 2 places during release
+        from importlib.metadata import version
+
+        installation_version = version("thonny")
+        embedded_version = thonny.get_version()
+        if installation_version != embedded_version:
+            messagebox.showwarning(
+                "Warning",
+                f"Thonny's installation version is reported as {installation_version!r},\n"
+                + f"but embedded version is {embedded_version!r}.",
+            )
 
 
 class WorkbenchEvent(Record):

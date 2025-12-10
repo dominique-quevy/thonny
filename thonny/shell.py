@@ -1,15 +1,27 @@
 # -*- coding: utf-8 -*-
 
 import os.path
+import pathlib
 import re
 import tkinter as tk
 import traceback
-from _tkinter import TclError
+from dataclasses import dataclass
 from logging import getLogger
 from tkinter import ttk
-from typing import Optional, cast
+from typing import List, Optional
 
-from thonny import get_runner, get_shell, get_workbench, memory, roughparse, running, ui_utils
+from _tkinter import TclError
+
+from thonny import (
+    get_runner,
+    get_shell,
+    get_workbench,
+    lsp_types,
+    memory,
+    roughparse,
+    running,
+    ui_utils,
+)
 from thonny.codeview import SyntaxText, get_syntax_options_for_tag, perform_python_return
 from thonny.common import (
     OBJECT_LINK_END,
@@ -22,6 +34,18 @@ from thonny.common import (
 )
 from thonny.custom_notebook import CustomNotebook
 from thonny.languages import tr
+from thonny.lsp_proxy import LanguageServerProxy
+from thonny.lsp_types import (
+    DidChangeTextDocumentParams,
+    DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams,
+    Position,
+    Range,
+    RangedTextDocumentContentChangeEvent,
+    TextDocumentIdentifier,
+    TextDocumentItem,
+    VersionedTextDocumentIdentifier,
+)
 from thonny.misc_utils import construct_cmd_line, parse_cmd_line
 from thonny.running import EDITOR_CONTENT_TOKEN
 from thonny.tktextext import TextFrame, TweakableText, index2line
@@ -75,6 +99,13 @@ ANSI_COLOR_NAMES = {
     "7": "white",
     "9": "default",
 }
+
+
+@dataclass
+class ExecutionInfo:
+    command_line: str
+    io_start_index: str
+    io_end_index: str
 
 
 class ShellView(tk.PanedWindow):
@@ -346,6 +377,12 @@ class BaseShellText(EnhancedTextWithLogging, SyntaxText):
         )  # actually not really history, because each command occurs only once
         self._command_history_current_index = None
 
+        self._last_ls_cwd: str = get_workbench().get_local_cwd()
+        self._last_ls_uri: Optional[lsp_types.URI] = None
+        self._last_ls_version: Optional[int] = None
+        self._context_lines_for_language_server: List[str] = []
+        self._session_num_executed_lines_sent_to_ls: int = 0
+
         # logs of IO events for current toplevel block
         # (enables undoing and redoing the events)
         self._applied_io_events = []
@@ -475,6 +512,13 @@ class BaseShellText(EnhancedTextWithLogging, SyntaxText):
 
     def _handle_toplevel_response(self, msg: ToplevelResponse) -> None:
         was_scrolled_to_end = self.is_scrolled_to_end()
+        if "source_for_language_server" in msg:
+            self._context_lines_for_language_server += msg["source_for_language_server"].splitlines(
+                keepends=True
+            )
+            if not self._context_lines_for_language_server[-1].endswith("\n"):
+                self._context_lines_for_language_server[-1] += os.linesep
+
         if msg.get("error"):
             self._ensure_visible()
 
@@ -573,7 +617,7 @@ class BaseShellText(EnhancedTextWithLogging, SyntaxText):
                 self._change_io_cursor_offset(-1)
             elif data == "\r":
                 self._change_io_cursor_offset("line")
-            elif data.startswith("\x1B]"):
+            elif data.startswith("\x1b]"):
                 self._handle_osc_sequence(data)
             elif data.endswith("D") or data.endswith("C"):
                 self._change_io_cursor_offset_csi(data)
@@ -964,6 +1008,11 @@ class BaseShellText(EnhancedTextWithLogging, SyntaxText):
         self.see("end")
         get_shell().set_osc_title("")
 
+        self._last_ls_uri = None
+        self._last_ls_version = None
+        self._context_lines_for_language_server = []
+        self._session_num_executed_lines_sent_to_ls = 0
+
     def intercept_insert(self, index, chars, tags=None, **kw):
         if tags is None:
             tags = ()
@@ -1030,7 +1079,7 @@ class BaseShellText(EnhancedTextWithLogging, SyntaxText):
             self._try_submit_input()
 
         elif get_runner().is_waiting_toplevel_command():
-            # Same with editin middle of command, but only if it's a single line command
+            # Same with editing middle of command, but only if it's a single line command
             whole_input = self.get("input_start", "end-1c")  # asking the whole input
             if "\n" not in whole_input and self._code_is_ready_for_submission(whole_input):
                 self.mark_set("insert", "end")  # move cursor to the end
@@ -1133,7 +1182,10 @@ class BaseShellText(EnhancedTextWithLogging, SyntaxText):
 
     def has_pending_input(self):
         pending = self.get("input_start", "end-1c")
-        return bool(pending)
+        return bool(self.get_pending_input())
+
+    def get_pending_input(self) -> str:
+        return self.get("input_start", "end-1c")
 
     def _try_submit_input(self):
         # see if there is already enough inputted text to submit
@@ -1272,7 +1324,7 @@ class BaseShellText(EnhancedTextWithLogging, SyntaxText):
                             if source == EDITOR_CONTENT_TOKEN:
                                 editor = get_workbench().get_editor_notebook().get_current_editor()
                                 assert editor
-                                self._last_main_file = editor.get_identifier()
+                                self._last_main_file = editor.get_uri()
                                 source = editor.get_content()
                         else:
                             source = None
@@ -1565,7 +1617,7 @@ class BaseShellText(EnhancedTextWithLogging, SyntaxText):
 
         self.tag_add("inactive", "1.0", end_index)
 
-        # inactivate values
+        # deactivate values
         pos = end_index
         while True:
             rng = self.tag_prevrange("value", pos)
@@ -1619,6 +1671,157 @@ class BaseShellText(EnhancedTextWithLogging, SyntaxText):
 
     def is_scrolled_to_end(self):
         return bool(self.bbox("end-1c"))
+
+    def extract_last_execution_info(self, command_pattern: str) -> Optional[ExecutionInfo]:
+        search_start = "end"
+        while True:
+            command_index = self.search(
+                command_pattern, index=search_start, backwards=True, regexp=True
+            )
+            if not command_index:
+                return None
+
+            if "magic" in self.tag_names(command_index):
+                # yep, that's the command
+                break
+            else:
+                # false alarm, keep looking
+                search_start = command_index
+
+        command_line = self.get(command_index, f"{command_index} lineend")
+        line_number = int(float(command_index))
+
+        # assuming there is next line
+        io_start_index = f"{line_number + 1}.0"
+        if not "io" in self.tag_names(io_start_index):
+            logger.info("No IO on the next line after %r", command_line)
+            return None
+
+        io_start_index2, io_end_index = self.tag_nextrange("io", io_start_index)
+        if io_start_index2 != io_start_index:
+            logger.warning(
+                "IO start index %r vs %r. IO end index: %r",
+                io_start_index,
+                io_start_index2,
+                io_end_index,
+            )
+            return None
+
+        if io_start_index == io_end_index:
+            logger.warning("IO start index == IO end index (%r)", io_end_index)
+            return None
+
+        return ExecutionInfo(command_line, io_start_index, io_end_index)
+
+    def get_ls_uri(self) -> str:
+        proxy = get_runner().get_backend_proxy()
+        assert proxy is not None
+
+        path = os.path.join(proxy.get_cwd(), "__shell_virtual_file__.py")
+
+        return pathlib.Path(path).as_uri()
+
+    def send_changes_to_language_server(self) -> None:
+        ls_proxy = get_workbench().get_main_language_server_proxy()
+        if ls_proxy is None:
+            return
+
+        proxy = get_runner().get_backend_proxy()
+        if proxy is None:
+            self._context_lines_for_language_server_are_sent_to_ls = False
+            return
+
+        ls_uri = self.get_ls_uri()
+        if ls_uri != self._last_ls_uri:
+            if self._last_ls_uri is not None:
+                ls_proxy.notify_did_close_text_document(
+                    DidCloseTextDocumentParams(TextDocumentIdentifier(uri=self._last_ls_uri))
+                )
+                self._session_num_executed_lines_sent_to_ls = 0
+
+            version = 1
+            ls_proxy.notify_did_open_text_document(
+                DidOpenTextDocumentParams(
+                    textDocument=TextDocumentItem(
+                        version=version,
+                        uri=ls_uri,
+                        text="".join(self._context_lines_for_language_server),
+                        languageId="python",
+                    )
+                )
+            )
+            self._last_ls_version = version
+            self._last_ls_uri = ls_uri
+            self._session_num_executed_lines_sent_to_ls = len(
+                self._context_lines_for_language_server
+            )
+
+        if self._session_num_executed_lines_sent_to_ls < len(
+            self._context_lines_for_language_server
+        ):
+            self._replace_suffix_at_ls(
+                ls_proxy,
+                self._session_num_executed_lines_sent_to_ls,
+                "".join(
+                    self._context_lines_for_language_server[
+                        self._session_num_executed_lines_sent_to_ls :
+                    ]
+                ),
+            )
+            self._session_num_executed_lines_sent_to_ls = len(
+                self._context_lines_for_language_server
+            )
+
+        self._replace_suffix_at_ls(
+            ls_proxy, self._session_num_executed_lines_sent_to_ls, self.get_pending_input()
+        )
+
+    def _replace_suffix_at_ls(
+        self, ls_proxy: LanguageServerProxy, unchanged_line_count: int, suffix_text: str
+    ) -> None:
+        version = self._last_ls_version + 1
+        ls_proxy.notify_did_change_text_document(
+            DidChangeTextDocumentParams(
+                textDocument=VersionedTextDocumentIdentifier(
+                    version=version, uri=self.get_ls_uri()
+                ),
+                contentChanges=[
+                    RangedTextDocumentContentChangeEvent(
+                        range=Range(
+                            start=Position(line=unchanged_line_count, character=0),
+                            end=Position(
+                                line=unchanged_line_count + len(suffix_text.splitlines()),
+                                character=0,
+                            ),
+                        ),
+                        text=suffix_text,
+                    )
+                ],
+            )
+        )
+        self._last_ls_version = version
+
+    def get_current_line_ls_offset(self) -> int:
+        """
+        Returns:
+            Difference between current line position in ls_source and shell's current content
+        """
+        input_start_line = int(float(self.index("input_start")))
+        num_preceding_lines_in_shell = input_start_line - 1
+        num_preceding_lines_in_ls = len(self._context_lines_for_language_server)
+        return num_preceding_lines_in_ls - num_preceding_lines_in_shell
+
+    def get_current_column_ls_offset(self) -> int:
+        """
+        Returns:
+            a negative integer if the line starts with non-input characters (e.g. prompt)
+        """
+        input_start_line, input_start_col = map(int, self.index("input_start").split("."))
+        current_line = int(float(self.index("insert")))
+        if current_line == input_start_line:
+            return -input_start_col
+
+        return 0
 
 
 class ShellText(BaseShellText):
@@ -1989,7 +2192,7 @@ class PlotterCanvas(tk.Canvas):
             fill=self.colors[color % len(self.colors)],
             tags=("segment",),
             # arrow may be confusing
-            # and doesn't play nice with distinguising between
+            # and doesn't play nice with distinguishing between
             # scrollback view and fresh_range view
             # arrow="last",
             # arrowshape=(3,5,3)

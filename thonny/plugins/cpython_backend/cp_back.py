@@ -190,7 +190,7 @@ class MainCPythonBackend(MainBackend):
             user_dir = os.getcwd()
 
         # rough test to see if it's worth invoking the finder
-        for ext in ["", ".py", ".pyw"]:
+        for ext in ["", ".py", ".pyw", ".pyde"]:
             pot_path = os.path.join(user_dir, root_module_name + ext)
             if os.path.exists(pot_path):
                 logger.debug("Found import candidate: %r", pot_path)
@@ -430,6 +430,7 @@ class MainCPythonBackend(MainBackend):
             in_venv=running_in_virtual_environment(),
             python_version=get_python_version_string(),
             cwd=os.getcwd(),
+            logfile=thonny.get_backend_log_file(),
         )
 
     def _cmd_cd(self, cmd):
@@ -818,9 +819,11 @@ class MainCPythonBackend(MainBackend):
         self._current_executor = executor_class(self, cmd)
         report_time("Done creating executor")
         try:
-            return self._current_executor.execute_source(
+            result = self._current_executor.execute_source(
                 source, filename, execution_mode, ast_postprocessors
             )
+            result["source_for_language_server"] = source
+            return result
         except SystemExit as e:
             sys.exit(e.code)
         finally:
@@ -882,8 +885,6 @@ class MainCPythonBackend(MainBackend):
 
         self._original_stdout.write(serialize_message(msg) + "\n")
         self._original_stdout.flush()
-        if isinstance(msg, ToplevelResponse):
-            self._check_load_jedi()
 
     def export_value(self, value, max_repr_length=5000):
         self._heap[id(value)] = value

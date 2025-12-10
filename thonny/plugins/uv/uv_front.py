@@ -17,18 +17,11 @@ class LocalCPythonUvProxy(LocalCPythonProxy):
 
     def compute_mgmt_executable(self):
         # TODO
-        return os.path.expanduser("~/.cargo/bin/uv")
-
-    def _get_launch_cwd(self):
-        # TODO: change to empty dir when https://github.com/astral-sh/uv/issues/5613 gets resolved
-        return get_workbench().get_local_cwd()
-
-    def get_target_executable(self):
-        # TODO: should give python exe?
-        return self._mgmt_executable
+        return os.path.expanduser("~/.local/bin/uv")
 
     def get_mgmt_executable_special_switches(self) -> List[str]:
-        cmd = ["run"]
+        cmd = ["run", "--project", self.get_cwd()]
+
         python = get_workbench().get_option(f"{self.backend_name}.python")
         if python != "auto":
             cmd += ["--python", python]
@@ -111,6 +104,7 @@ class LocalCPythonUvConfigurationPage(TabbedBackendDetailsConfigurationPage):
         super().__init__(master)
 
         self.options_page = self.create_and_add_empty_page(tr("Options"))
+        self.stubs_page = self.create_and_add_stubs_page(proxy_class=self.proxy_class)
 
         label = ttk.Label(self.options_page, text="uv")
         label.grid()

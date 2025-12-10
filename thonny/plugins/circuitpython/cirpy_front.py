@@ -1,3 +1,4 @@
+import os.path
 from logging import getLogger
 from typing import List, Optional
 
@@ -59,6 +60,10 @@ class CircuitPythonProxy(BareMetalMicroPythonProxy):
         }
 
     @classmethod
+    def get_pypi_common_tokens(cls) -> List[str]:
+        return ["circuitpython", "adafruit"]
+
+    @classmethod
     def get_vids_pids_to_avoid(self):
         return VIDS_PIDS_TO_AVOID
 
@@ -86,6 +91,10 @@ class CircuitPythonProxy(BareMetalMicroPythonProxy):
             return True
 
         return "CircuitPython CDC " in (p.interface or "")
+
+    @classmethod
+    def get_vendored_user_stubs_ids(cls) -> List[str]:
+        return ["circuitpython-typeshed"]
 
 
 class CircuitPythonConfigPage(BareMetalMicroPythonConfigPage):

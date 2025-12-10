@@ -19,7 +19,7 @@ from thonny.config_ui import (
     add_vertical_separator,
 )
 from thonny.languages import tr
-from thonny.misc_utils import download_and_parse_json, levenshtein_distance
+from thonny.misc_utils import download_and_parse_json
 from thonny.plugins.backend_config_page import (
     BaseSshProxyConfigPage,
     TabbedBackendDetailsConfigurationPage,
@@ -91,6 +91,9 @@ class MicroPythonProxy(SubprocessProxy):
     def has_local_interpreter(self):
         return False
 
+    def interpreter_is_cpython_compatible(self) -> bool:
+        return False
+
     def can_debug(self) -> bool:
         return False
 
@@ -132,45 +135,27 @@ class MicroPythonProxy(SubprocessProxy):
         return False
 
     @classmethod
+    def get_pypi_common_tokens(cls) -> List[str]:
+        return ["micropython"]
+
+    @classmethod
     def search_packages(cls, query: str) -> List[DistInfo]:
-        from thonny.plugins.pip_gui import perform_pypi_search
+        from thonny.plugins.pip_gui import compute_dist_name_similarity, perform_pypi_search
 
         norm_query = canonicalize_name(query.strip())
+        query_parts = norm_query.split("-")
 
-        def distance(item: DistInfo) -> int:
-            norm_name = canonicalize_name(item.name)
-            if norm_name == norm_query:
-                # don't argue with exact match
-                return 0
-
-            result = levenshtein_distance(norm_name, norm_query)
-
-            if "micropython" in norm_query and item.source == "micropython-lib":
-                # direct the user towards micropython-lib and names without "micropython"
-                new_result = levenshtein_distance(
-                    norm_name, norm_query.replace("micropython", "").strip("-")
-                )
-                if new_result < result:
-                    result = new_result
-
-            # try matching without qualifiers
-            simple_name = norm_name
-            simple_query = norm_query
-            for qualifier in ["adafruit-circuitpython", "circuitpython", "micropython"]:
-                simple_name = simple_name.replace(qualifier, "").replace("--", "-").strip("-")
-                simple_query = simple_query.replace(qualifier, "").replace("--", "-").strip("-")
-
-            new_result = levenshtein_distance(simple_name, simple_query)
-            if new_result < result:
-                result = new_result + 1
-
-            return result
+        def similarity(item: DistInfo) -> float:
+            return compute_dist_name_similarity(
+                item.name, query_parts, cls.get_pypi_common_tokens()
+            )
 
         mp_lib_result = cls._get_micropython_lib_dist_infos()
-        pypi_result = perform_pypi_search(query)
-        if "micropython" not in query.lower() and "circuitpython" not in query.lower():
-            pypi_result += perform_pypi_search("micropython " + query)
-            pypi_result += perform_pypi_search("circuitpython " + query)
+        pypi_result = perform_pypi_search(
+            query,
+            get_workbench().get_data_url("pypi_summaries_microcircuit.json"),
+            cls.get_pypi_common_tokens(),
+        )
 
         combined_result = []
         mp_lib_names = set()
@@ -199,8 +184,8 @@ class MicroPythonProxy(SubprocessProxy):
             if norm_name == norm_query or mentions_right_tokens:
                 combined_result.append(item)
 
-        sorted_result = sorted(combined_result, key=distance)
-        filtered_result = filter(lambda x: distance(x) < 4, sorted_result[:20])
+        sorted_result = sorted(combined_result, key=similarity, reverse=True)
+        filtered_result = filter(lambda x: similarity(x) > 0.6, sorted_result[:20])
 
         return list(filtered_result)
 
@@ -355,7 +340,6 @@ class BareMetalMicroPythonProxy(MicroPythonProxy):
                 self.backend_name + ".interrupt_on_connect"
             ),
             "proxy_class": self.__class__.__name__,
-            "user_stubs_location": self.get_user_stubs_location(),
         }
         if self._port == WEBREPL_PORT_VALUE:
             args["url"] = get_workbench().get_option(self.backend_name + ".webrepl_url")
@@ -658,6 +642,10 @@ class BareMetalMicroPythonProxy(MicroPythonProxy):
 
     def get_machine_id(self) -> str:
         return self._machine_id
+
+    @classmethod
+    def get_vendored_user_stubs_ids(cls) -> List[str]:
+        return ["micropython-typeshed"]
 
 
 class BareMetalMicroPythonConfigPage(TabbedBackendDetailsConfigurationPage):
@@ -1218,7 +1206,6 @@ class LocalMicroPythonProxy(MicroPythonProxy):
                 {
                     "interpreter": self._target_executable,
                     "cwd": self.get_cwd(),
-                    "user_stubs_location": self.get_user_stubs_location(),
                 }
             ),
         ]
@@ -1312,12 +1299,17 @@ class LocalMicroPythonProxy(MicroPythonProxy):
     def can_install_packages_from_files(self) -> bool:
         return True
 
+    @classmethod
+    def get_vendored_user_stubs_ids(cls) -> List[str]:
+        return ["micropython-unix-typeshed"]
+
 
 class LocalMicroPythonConfigPage(TabbedBackendDetailsConfigurationPage):
 
     def __init__(self, master):
         super().__init__(master)
         self.executable_page = self.create_and_add_empty_page(tr("Executable"))
+        self.stubs_page = self.create_and_add_stubs_page(proxy_class=self.proxy_class)
 
         add_option_entry(
             self.executable_page, "LocalMicroPython.executable", tr("Interpreter"), width=30
@@ -1333,6 +1325,7 @@ class LocalMicroPythonConfigPage(TabbedBackendDetailsConfigurationPage):
 class SshMicroPythonProxy(MicroPythonProxy):
     def __init__(self, clean):
         self._host = get_workbench().get_option(f"{self.backend_name}.host")
+        self._port = get_workbench().get_option(f"{self.backend_name}.port")
         self._user = get_workbench().get_option(f"{self.backend_name}.user")
         self._target_executable = get_workbench().get_option(f"{self.backend_name}.executable")
 
@@ -1345,8 +1338,8 @@ class SshMicroPythonProxy(MicroPythonProxy):
             "cwd": get_workbench().get_option(f"{self.backend_name}.cwd") or "",
             "interpreter": self._target_executable,
             "host": self._host,
+            "port": self._port,
             "user": self._user,
-            "user_stubs_location": self.get_user_stubs_location(),
         }
 
         args.update(self._get_time_args())
@@ -1477,6 +1470,10 @@ class SshMicroPythonProxy(MicroPythonProxy):
 
     def get_machine_id(self) -> str:
         return self._host
+
+    @classmethod
+    def get_vendored_user_stubs_ids(cls) -> List[str]:
+        return ["micropython-unix-typeshed"]
 
 
 class SshMicroPythonConfigPage(BaseSshProxyConfigPage):

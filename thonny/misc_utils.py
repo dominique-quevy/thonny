@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import datetime
 import os.path
+import pathlib
 import platform
 import queue
 import shlex
@@ -10,14 +10,27 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from logging import getLogger
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+from urllib.parse import unquote
 
+from thonny import get_runner
 from thonny.languages import tr
 
 PASSWORD_METHOD = "password"
 PUBLIC_KEY_NO_PASS_METHOD = "public-key (without passphrase)"
 PUBLIC_KEY_WITH_PASS_METHOD = "public-key (with passphrase)"
+
+FILE_URI_SCHEME: str = "file"
+REMOTE_URI_SCHEME: str = "remote"
+UNTITLED_URI_SCHEME: str = "untitled"
+PLACEHOLDER_URI = f"{UNTITLED_URI_SCHEME}:0"
+
+REMOTE_PATH_MARKER = " :: "
+
+PROJECT_MARKERS = ["pyproject.toml", "setup.cfg", "setup.py", ".python-version", "Pipfile"]
+
 
 logger = getLogger(__name__)
 
@@ -319,104 +332,51 @@ def parse_cmd_line(s):
     return shlex.split(s, posix=True)
 
 
-def levenshtein_distance(s1, s2):
-    # https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Levenshtein_distance#Python
-    if len(s1) < len(s2):
-        return levenshtein_distance(s2, s1)  # pylint: disable=arguments-out-of-order
+def jaro_similarity(s, t):
+    """Jaro distance between two strings."""
+    # Source: https://rosettacode.org/wiki/Jaro_similarity
+    s_len = len(s)
+    t_len = len(t)
 
-    # len(s1) >= len(s2)
-    if len(s2) == 0:
-        return len(s1)
+    if s_len == 0 and t_len == 0:
+        return 1
 
-    previous_row = range(len(s2) + 1)
-    for i, c1 in enumerate(s1):
-        current_row = [i + 1]
-        for j, c2 in enumerate(s2):
-            insertions = (
-                previous_row[j + 1] + 1
-            )  # j+1 instead of j since previous_row and current_row are one character longer
-            deletions = current_row[j] + 1  # than s2
-            substitutions = previous_row[j] + (c1 != c2)
-            current_row.append(min(insertions, deletions, substitutions))
-        previous_row = current_row
+    match_distance = (max(s_len, t_len) // 2) - 1
 
-    return previous_row[-1]
+    s_matches = [False] * s_len
+    t_matches = [False] * t_len
 
+    matches = 0
+    transpositions = 0
 
-def levenshtein_damerau_distance(s1, s2, maxDistance):
-    # https://gist.github.com/giststhebearbear/4145811
-    #  get smallest string so our rows are minimized
-    s1, s2 = (s1, s2) if len(s1) <= len(s2) else (s2, s1)
-    #  set lengths
-    l1, l2 = len(s1), len(s2)
+    for i in range(s_len):
+        start = max(0, i - match_distance)
+        end = min(i + match_distance + 1, t_len)
 
-    #  We are simulatng an NM matrix where n is the longer string
-    #  and m is the shorter string. By doing this we can minimize
-    #  memory usage to O(M).
-    #  Since we are simulating the matrix we only maintain two rows
-    #  at a time the current row and the previous rows.
-    #  A move from the current cell looking at the cell before it indicates
-    #  consideration of an insert operation.
-    #  A move from the current cell looking at the cell above it indicates
-    #  consideration of a deletion
-    #  Both operations are cost 1
-    #  A move from the current cell to the cell up and to the left indicates
-    #  an edit operation of 0 cost for a matching character and a 1 cost for
-    #  a non matching characters
-    #  no row has been previously computed yet, set empty row
-    #  Since this is also a Damerou-Levenshtein calculation transposition
-    #  costs will be taken into account. These look back 2 characters to
-    #  determine optimal cost based on a possible transposition
-    #  example: aei -> aie with levensthein has a cost of 2
-    #  match a, change e->i change i->e => aie
-    #  Damarau-Levenshtein has a cost of 1
-    #  match a, transpose ei to ie => aie
-    transpositionRow = []
-    prevRow = []
+        for j in range(start, end):
+            if t_matches[j]:
+                continue
+            if s[i] != t[j]:
+                continue
+            s_matches[i] = True
+            t_matches[j] = True
+            matches += 1
+            break
 
-    #  build first leven matrix row
-    #  The first row represents transformation from an empty string
-    #  to the shorter string making it static [0-n]
-    #  since this row is static we can set it as
-    #  curRow and start computation at the second row or index 1
-    curRow = list(range(0, l1 + 1))
+    if matches == 0:
+        return 0
 
-    # use second length to loop through all the rows being built
-    # we start at row one
-    for rowNum in range(1, l2 + 1):
-        #  set transposition, previous, and current
-        #  because the rowNum always increments by one
-        #  we can use rowNum to set the value representing
-        #  the first column which is indicitive of transforming TO
-        #  the empty string from our longer string
-        #  transposition row maintains an extra row so that it is possible
-        #  for us to apply Damarou's formula
-        transpositionRow, prevRow, curRow = prevRow, curRow, [rowNum] + [0] * l1
+    k = 0
+    for i in range(s_len):
+        if not s_matches[i]:
+            continue
+        while not t_matches[k]:
+            k += 1
+        if s[i] != t[k]:
+            transpositions += 1
+        k += 1
 
-        #  consider if we have passed the max distance if all paths through
-        #  the transposition row are larger than the max we can stop calculating
-        #  distance and return the last element in that row and return the max
-        if transpositionRow:
-            if not any(cellValue < maxDistance for cellValue in transpositionRow):
-                return maxDistance
-
-        for colNum in range(1, l1 + 1):
-            insertionCost = curRow[colNum - 1] + 1
-            deletionCost = prevRow[colNum] + 1
-            changeCost = prevRow[colNum - 1] + (0 if s1[colNum - 1] == s2[rowNum - 1] else 1)
-            #  set the cell value - min distance to reach this
-            #  position
-            curRow[colNum] = min(insertionCost, deletionCost, changeCost)
-
-            #  test for a possible transposition optimization
-            #  check to see if we have at least 2 characters
-            if 1 < rowNum <= colNum:
-                #  test for possible transposition
-                if s1[colNum - 1] == s2[colNum - 2] and s2[colNum - 1] == s1[colNum - 2]:
-                    curRow[colNum] = min(curRow[colNum], transpositionRow[colNum - 2] + 1)
-
-    #  the last cell of the matrix is ALWAYS the shortest distance between the two strings
-    return curRow[-1]
+    return ((matches / s_len) + (matches / t_len) + ((matches - transpositions / 2) / matches)) / 3
 
 
 def get_file_creation_date(path_to_file):
@@ -512,7 +472,7 @@ def sizeof_fmt(num, suffix="B"):
     """Readable file size
     :param num: Bytes value
     :type num: int
-    :param suffix: Unit suffix (optionnal) default = B
+    :param suffix: Unit suffix (optional) default = B
     :type suffix: str
     :rtype: str
     """
@@ -770,3 +730,169 @@ def _compute_date_format_with_month_abbrev():
 def version_str_to_tuple_of_ints(s: str) -> Tuple[int]:
     parts = s.split(".")
     return tuple([int(part) for part in parts if part.isnumeric()])
+
+
+def uri_to_target_path(uri: str) -> str:
+    parts = urllib.parse.urlsplit(uri)
+    if parts.scheme == UNTITLED_URI_SCHEME:
+        raise ValueError("Can't get path of untitled uri")
+
+    elif parts.scheme == FILE_URI_SCHEME:
+        if parts.netloc:
+            # assuming Windows UNC
+            return f"//{parts.netloc}{unquote(parts.path)}"
+
+        path = unquote(parts.path)
+        if path.startswith("/") and path[2:3] == ":":
+            # Windows path
+            return path[1:].replace("/", "\\")
+        else:
+            return path
+
+    elif parts.scheme == REMOTE_URI_SCHEME:
+        return unquote(parts.path)
+
+    else:
+        raise ValueError(f"Unsupported URI scheme '{parts.scheme}'")
+
+
+def legacy_remote_filename_to_target_path(s) -> str:
+    assert is_legacy_remote_filename(s)
+    return s[s.find(REMOTE_PATH_MARKER) + len(REMOTE_PATH_MARKER) :]
+
+
+def is_legacy_remote_filename(s: str) -> bool:
+    return REMOTE_PATH_MARKER in s
+
+
+def is_local_path(s: str) -> bool:
+    return (
+        not is_legacy_remote_filename(s)
+        and not s.startswith("<")
+        and (s.startswith("/") or s[1:3] == ":\\")
+    )
+
+
+def uri_to_legacy_filename(uri: str) -> str:
+    """Returns 'blah :: /path/file' for remote files, as was common in Thonny 4"""
+    if is_remote_uri(uri):
+        return make_legacy_remote_path(uri_to_target_path(uri))
+    else:
+        return uri_to_target_path(uri)
+
+
+def ensure_uri(filename_or_uri: str) -> str:
+    if is_legacy_remote_filename(filename_or_uri):
+        return legacy_filename_to_uri(filename_or_uri)
+    elif is_local_path(filename_or_uri):
+        return local_path_to_uri(filename_or_uri)
+    elif ":" in filename_or_uri:
+        return filename_or_uri
+    else:
+        raise ValueError(f"Can't understand filename or uri: {filename_or_uri!r}")
+
+
+def legacy_filename_to_uri(filename: str) -> str:
+    if is_legacy_remote_filename(filename):
+        return remote_path_to_uri(legacy_remote_filename_to_target_path(filename))
+    else:
+        return local_path_to_uri(filename)
+
+
+def uri_to_long_title(uri: str) -> str:
+    if is_untitled_uri(uri):
+        return format_untitled_uri(uri)
+    elif is_remote_uri(uri):
+        return make_legacy_remote_path(uri_to_target_path(uri))
+    elif is_local_uri(uri):
+        return uri_to_target_path(uri)
+    else:
+        raise ValueError(f"Unexpected uri: {uri}")
+
+
+def local_path_to_uri(path: str) -> str:
+    if path.startswith("//"):
+        # UNC
+        return f"{FILE_URI_SCHEME}:{urllib.parse.quote(path)}"
+    elif path[1:3] == ":\\":
+        # Regular Windows path, needs special treatment on other platforms
+        return pathlib.PureWindowsPath(path).as_uri()
+    else:
+        assert path.startswith("/")
+        return f"{FILE_URI_SCHEME}://{urllib.parse.quote(path)}"
+
+
+def remote_path_to_uri(path: str) -> str:
+    assert path.startswith("/")
+    return f"{REMOTE_URI_SCHEME}://netloc{urllib.parse.quote(path)}"
+
+
+def is_untitled_uri(uri: str) -> bool:
+    return uri.startswith(UNTITLED_URI_SCHEME + ":")
+
+
+def is_local_uri(uri: str) -> bool:
+    """Whether the file is "local" in the sense that it can be read and written with
+    simple open-call. Includes UNC files in Windows (???)"""
+    return uri.startswith(FILE_URI_SCHEME + ":")
+
+
+def is_remote_uri(uri: str) -> bool:
+    return uri.startswith(REMOTE_URI_SCHEME + ":")
+
+
+def is_editor_supported_uri(uri: str) -> bool:
+    return is_local_uri(uri) or is_remote_uri(uri) or is_untitled_uri(uri)
+
+
+def format_untitled_uri(uri: str) -> str:
+    return tr("<untitled>")
+
+
+def make_legacy_remote_path(target_path):
+    return get_runner().get_node_label() + REMOTE_PATH_MARKER + target_path
+
+
+def is_local_project_dir(path: str) -> bool:
+    if not os.path.isdir(path):
+        return False
+
+    for marker in PROJECT_MARKERS:
+        if os.path.exists(os.path.join(path, marker)):
+            return True
+
+    return False
+
+
+def is_local_venv_dir(path: str) -> bool:
+    if not os.path.isdir(path):
+        return False
+
+    return os.path.isfile(os.path.join(path, "pyvenv.cfg"))
+
+
+def get_project_venv_interpreters(project_path: str) -> List[str]:
+    if not os.path.isdir(project_path):
+        return []
+
+    # TODO: try find Pyenv, Pipenv and Poetry interpreters
+
+    name_ranking = [".venv", "venv", ".env"]
+
+    exe_candidates = []
+    for name in os.listdir(project_path):
+        venv_candidate = os.path.join(project_path, name)
+        if ("venv" in name or ".env" in name) and is_local_venv_dir(venv_candidate):
+            if os.name == "nt":
+                exe_candidate = os.path.join(venv_candidate, "Scripts", "python.exe")
+            else:
+                exe_candidate = os.path.join(venv_candidate, "bin", "python")
+
+            if os.path.isfile(exe_candidate):
+                if name in name_ranking:
+                    rank = name_ranking.index(name)
+                else:
+                    rank = 10
+                exe_candidates.append((rank, exe_candidate))
+
+    return [candidate for _, candidate in sorted(exe_candidates)]

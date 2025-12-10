@@ -1070,7 +1070,10 @@ class BareMetalMicroPythonBackend(MicroPythonBackend, UploadDownloadMixin):
             self._execute(source, capture_output=False)
             if restart_interpreter_before_run:
                 self._prepare_after_soft_reboot(False)
-        return {}
+
+            return {"source_for_language_server": cmd["source"]}
+        else:
+            return {}
 
     def _cmd_execute_system_command(self, cmd):
         # Can't use stdin, because a thread is draining it
@@ -1720,11 +1723,7 @@ class BareMetalMicroPythonBackend(MicroPythonBackend, UploadDownloadMixin):
 
 
 class GenericBareMetalMicroPythonBackend(BareMetalMicroPythonBackend):
-    def _get_sys_path_for_analysis(self) -> Optional[List[str]]:
-        return [
-            self.get_user_stubs_location(),
-            os.path.join(os.path.dirname(__file__), "generic_api_stubs"),
-        ] + super()._get_sys_path_for_analysis()
+    pass
 
 
 class RawPasteNotSupportedError(RuntimeError):
