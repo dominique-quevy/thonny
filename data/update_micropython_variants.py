@@ -12,9 +12,9 @@ from update_variants_common import (
 
 base_url = "https://micropython.org/download/"
 
-UNSTABLE_VERSION = r"\d{8}-v1.28.0-preview\.\d+\.[a-z0-9]{10}"
-PREV_RELEVANT_VERSION = "1.26.1"
-PREV_RELEVANT_VERSION_IN_URL = "20250911-v1.26.1"
+UNSTABLE_VERSION = r"\d{8}-v1.29.0-preview\.\d+\.[a-z0-9]{10}"
+PREV_RELEVANT_VERSION = "1.27.0"
+PREV_RELEVANT_VERSION_IN_URL = "20251209-v1.27.0"
 
 
 class IndexParser(HTMLParser):
@@ -152,30 +152,30 @@ all_variants += badger_variants
 ########################################################
 pimo2350_variants = [
     {
-        "_id": "pico2",
+        "_id": "rpi_pico2",
         "vendor": "Raspberry Pi",
         "model": "Pico 2",
     },
     {
-        "_id": "pico2b_rp2350",
+        "_id": "rpi_pico2b",
         "vendor": "Raspberry Pi",
         "model": "Pico 2 (b)",
     },
     {
-        "_id": "pico2_w",
+        "_id": "rpi_pico2_w",
         "vendor": "Raspberry Pi",
         "model": "Pico 2 W",
     },
     {
-        "_id": "pico_plus2_rp2350",
+        "_id": "pimoroni_pico_plus2",
         "model": "Pico Plus 2",
     },
     {
-        "_id": "plasma2350",
+        "_id": "pimoroni_plasma2350",
         "model": "Plasma 2350",
     },
     {
-        "_id": "tiny2350",
+        "_id": "pimoroni_tiny2350",
         "model": "Tiny 2350",
     },
 ]
@@ -187,9 +187,9 @@ add_defaults_and_downloads_to_variants(
         "vendor": "Pimoroni",
         "family": "rp2",
         "info_url": "https://github.com/pimoroni/pimoroni-pico-rp2350/releases",
-        "_download_url_pattern": "https://github.com/pimoroni/pimoroni-pico-rp2350/releases/download/v{version}/{id}-v{version}-pimoroni-micropython.uf2",
+        "_download_url_pattern": "https://github.com/pimoroni/pimoroni-pico-rp2350/releases/download/v{version}/{id}-v{version}-micropython.uf2",
     },
-    ["0.0.12", "0.0.11"],
+    ["1.26.1"],
     pimo2350_variants,
 )
 
@@ -208,6 +208,18 @@ pimoroni_variants = [
         "model": "Pico",
     },
     {
+        "_id": "pico_ppp",
+        "vendor": "Raspberry Pi",
+        "model": "Pico",
+        "title": "Pico (with Pimoroni libraries and PPP)",
+    },
+    {
+        "_id": "pico_usb",
+        "vendor": "Raspberry Pi",
+        "model": "Pico",
+        "title": "Pico (with Pimoroni libraries and USB)",
+    },
+    {
         "_id": "picolipo_16mb",
         "model": "Pimoroni Pico LiPo (16MB)",
     },
@@ -221,24 +233,12 @@ pimoroni_variants = [
         "model": "Pico W",
     },
     {
-        "_id": "cosmic_unicorn",
-        "model": "Cosmic Unicorn",
-    },
-    {
         "_id": "enviro",
         "model": "Enviro",
     },
     {
-        "_id": "galactic_unicorn",
-        "model": "Galactic Unicorn",
-    },
-    {
         "_id": "inky_frame",
         "model": "Inky Frame",
-    },
-    {
-        "_id": "stellar_unicorn",
-        "model": "Stellar Unicorn",
     },
     {
         "_id": "tiny2040_8mb",
@@ -259,7 +259,7 @@ add_defaults_and_downloads_to_variants(
         "info_url": "https://github.com/pimoroni/pimoroni-pico/releases",
         "_download_url_pattern": "https://github.com/pimoroni/pimoroni-pico/releases/download/v{version}/{id}-v{version}-pimoroni-micropython.uf2",
     },
-    ["1.23.0-1"],
+    ["1.27.0", "1.25.0"],
     pimoroni_variants,
 )
 
@@ -278,6 +278,10 @@ pololu_variants = [
         "family": "rp2",
         "info_url": "https://github.com/pololu/micropython-build/releases/",
         "downloads": [
+            {
+                "version": "260210",
+                "url": "https://github.com/pololu/micropython-build/releases/download/260210/micropython-pololu-3pi-2040-robot-v1.27.0-260210.uf2"
+            },
             {
                 "version": "240117",
                 "url": "https://github.com/pololu/micropython-build/releases/download/240117/micropython-pololu-3pi-2040-robot-v1.22.1-240117.uf2"
@@ -306,6 +310,10 @@ pololu_variants = [
         "family": "rp2",
         "info_url": "https://github.com/pololu/micropython-build/releases/",
         "downloads": [
+            {
+                "version": "260210",
+                "url": "https://github.com/pololu/micropython-build/releases/download/260210/micropython-pololu-zumo-2040-robot-v1.27.0-260210.uf2"
+            },
             {
                 "version": "240117",
                 "url": "https://github.com/pololu/micropython-build/releases/download/240117/micropython-pololu-zumo-2040-robot-v1.22.1-240117.uf2"
